@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tokenConfig, exportStatus } from "../stores";
+    import { tokenConfig, exportStatus, isGenerating } from "../stores";
     import { exportTokens } from "../exportTokens";
     import IconSearch from "./IconSearch.svelte";
 
@@ -12,6 +12,7 @@
         const file = input.files[0];
         const reader = new FileReader();
         reader.onload = (e) => {
+            isGenerating.set(true);
             const content = e.target?.result as string;
             tokenConfig.update((c) => {
                 c.svgContent = content;
@@ -272,9 +273,63 @@
             class="primary export-btn" 
             on:click={handleExport}
             disabled={$exportStatus.active}
+            style="width: 100%; margin-bottom: 1rem;"
         >
             {$exportStatus.active ? 'Exporting...' : 'Export STL Sequence'}
         </button>
+
+        <footer class="panel-footer">
+            <div class="footer-links">
+              <!-- Repository is private, commenting out GitHub link per request -->
+              <!-- 
+              <a
+                href="https://github.com/oscar-eriksson/tokenmaker"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><path
+                    d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7a3.37 3.37 0 0 0-.94 2.58V22"
+                  ></path></svg
+                >
+                GitHub
+              </a>
+              -->
+              <a href="https://ko-fi.com/oscareriksson2" target="_blank" rel="noopener noreferrer">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M18 8h1a4 4 0 0 1 0 8h-1"></path>
+                  <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path>
+                  <line x1="6" y1="1" x2="6" y2="4"></line>
+                  <line x1="10" y1="1" x2="10" y2="4"></line>
+                  <line x1="14" y1="1" x2="14" y2="4"></line>
+                </svg>
+                Ko-fi
+              </a>
+            </div>
+            <div class="credits">
+              <span>By Oscar Eriksson</span>
+              <span class="version">v1.1.0</span>
+            </div>
+        </footer>
     </div>
 </aside>
 
@@ -391,7 +446,48 @@
         cursor: not-allowed;
     }
 
-    .export-overlay {
+    .panel-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+    }
+
+    .footer-links {
+        display: flex;
+        gap: 0.8rem;
+    }
+
+    .panel-footer a {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--color-text-muted);
+        text-decoration: none;
+        transition: color 0.2s;
+    }
+
+    .panel-footer a:hover {
+        color: var(--color-primary);
+    }
+
+    .credits {
+        text-align: right;
+        opacity: 0.8;
+        line-height: 1.2;
+    }
+
+    .credits span {
+        display: block;
+    }
+
+    .version {
+        font-size: 0.65rem;
+        opacity: 0.6;
+    }
+
+    .spinner {
         position: fixed;
         inset: 0;
         background: rgba(0, 0, 0, 0.7);

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import { tokenConfig } from "../stores";
+    import { tokenConfig, isGenerating } from "../stores";
 
     let searchQuery = "";
     let showResults = false;
@@ -63,6 +63,7 @@
     async function selectIcon(icon: { name: string; path: string }) {
         searchQuery = icon.name;
         showResults = false;
+        isGenerating.set(true);
 
         // Fetch the raw SVG from github
         const url = `https://raw.githubusercontent.com/game-icons/icons/master/${icon.path}`;
@@ -79,6 +80,7 @@
             }
         } catch (e) {
             console.error("Error fetching icon SVG", e);
+            isGenerating.set(false);
         }
     }
 </script>

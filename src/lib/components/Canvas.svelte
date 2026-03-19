@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from "svelte";
     import * as THREE from "three";
     import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-    import { tokenConfig, isDragging } from "../stores";
+    import { tokenConfig, isDragging, isGenerating } from "../stores";
     import { createTokenGroup } from "../tokenGenerator";
 
     let container: HTMLDivElement;
@@ -14,7 +14,6 @@
     let controls: OrbitControls;
     let currentTokenGroup: THREE.Group | null = null;
     let isSceneReady = false;
-    let isGenerating = false;
 
     // Responsive container bounds
     let wrapperW = 0;
@@ -66,9 +65,9 @@
     async function updateToken(config: any) {
         if (!scene) return;
 
-        isGenerating = true;
+        isGenerating.set(true);
         // Yield thread so Svelte can render the UI change before CPU blocks
-        await new Promise(r => setTimeout(r, 10));
+        await new Promise(r => setTimeout(r, 100)); // Increased delay for safer rendering
 
         try {
             if (currentTokenGroup) {
@@ -98,7 +97,7 @@
             currentTokenGroup = group;
             scene.add(group);
         } finally {
-            isGenerating = false;
+            isGenerating.set(false);
         }
     }
 
@@ -159,12 +158,12 @@
             class="interactive-canvas-box"
             style="width: {boxSize}px; height: {boxSize}px;"
             bind:this={container}
-            class:paused={$isDragging || isGenerating}
+            class:paused={$isDragging || $isGenerating}
         >
             <canvas bind:this={canvas}></canvas>
             {#if $isDragging}
                 <div class="pause-overlay">Paused while dragging 2D layout...</div>
-            {:else if isGenerating}
+            {:else if $isGenerating}
                 <div class="pause-overlay">
                     <span class="spinner"></span> Generating 3D token...
                 </div>

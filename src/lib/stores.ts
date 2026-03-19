@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 
 export const isDragging = writable(false);
+export const isGenerating = writable(false);
 
 export const tokenConfig = writable({
     width: 25,

@@ -7,6 +7,47 @@ import { SUBTRACTION, INTERSECTION, ADDITION, Evaluator, Brush } from 'three-bvh
 import * as ClipperLib from 'clipper-lib';
 
 // Robust 2D polygon offsetting using ClipperLib
+// Robust 2D polygon operations using ClipperLib
+function booleanShapesRobust(subjects: THREE.Shape[], clips: THREE.Shape[], op: number): THREE.Shape[] {
+    const scale = 100000;
+    const clipper = new ClipperLib.Clipper();
+    
+    function addShapesToClipper(shapes: THREE.Shape[], type: any) {
+        for (const shape of shapes) {
+            const outerPts = shape.getPoints(12);
+            clipper.AddPath(outerPts.map(p => ({ X: Math.round(p.x * scale), Y: Math.round(p.y * scale) })), type, true);
+            if (shape.holes && shape.holes.length > 0) {
+                for (const hole of shape.holes) {
+                    const holePts = hole.getPoints(12);
+                    clipper.AddPath(holePts.map(p => ({ X: Math.round(p.x * scale), Y: Math.round(p.y * scale) })), type, true);
+                }
+            }
+        }
+    }
+
+    addShapesToClipper(subjects, ClipperLib.PolyType.ptSubject);
+    addShapesToClipper(clips, ClipperLib.PolyType.ptClip);
+
+    const solutionTree = new ClipperLib.PolyTree();
+    clipper.Execute(op, solutionTree, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    
+    const resultShapes: THREE.Shape[] = [];
+    function parseNode(node: any) {
+        if (!node.IsHole()) {
+            const shapePts = node.Contour().map((pt: any) => new THREE.Vector2(pt.X / scale, pt.Y / scale));
+            const shape = new THREE.Shape(shapePts);
+            for (const child of node.Childs()) {
+                const holePts = child.Contour().map((pt: any) => new THREE.Vector2(pt.X / scale, pt.Y / scale));
+                shape.holes.push(new THREE.Path(holePts));
+                for (const island of child.Childs()) parseNode(island);
+            }
+            resultShapes.push(shape);
+        }
+    }
+    for (const child of solutionTree.Childs()) parseNode(child);
+    return resultShapes;
+}
+
 function offsetShapesRobust(shapes: THREE.Shape[], amount: number): THREE.Shape[] {
     const scale = 100000;
     const co = new ClipperLib.ClipperOffset();
@@ -15,7 +56,7 @@ function offsetShapesRobust(shapes: THREE.Shape[], amount: number): THREE.Shape[
 
     const paths: any[][] = [];
     for (const shape of shapes) {
-        const outerPts = shape.getPoints(12); // Reduced from 24
+        const outerPts = shape.getPoints(12);
         paths.push(outerPts.map(p => ({ X: Math.round(p.x * scale), Y: Math.round(p.y * scale) })));
         if (shape.holes && shape.holes.length > 0) {
             for (const hole of shape.holes) {
@@ -92,7 +133,7 @@ export interface TokenOptions {
 
 export async function createTokenGroup(options: TokenOptions): Promise<THREE.Group> {
     const group = new THREE.Group();
-    const overlap = 0.1;
+    const overlap = 0.5; // Increased for more robust booleans
 
     // 1. Base
     const radius = options.width / 2;
@@ -102,7 +143,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
     circleShape.absarc(0, 0, radius, 0, Math.PI * 2, false);
     const baseGeom = new THREE.ExtrudeGeometry(circleShape, {
         depth: baseDepth,
-        curveSegments: 32, // Further optimized
+        curveSegments: 64, // Increased for smoother circumference
         bevelEnabled: true,
         bevelSize: filletR,
         bevelThickness: filletR,
@@ -127,7 +168,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
         const ttfSize = options.textSize * (72 / 100);
         const letterShapes = font.generateShapes(options.label, ttfSize);
 
-        const textGeom = new THREE.ExtrudeGeometry(letterShapes, { depth: options.textDepth + overlap, bevelEnabled: false, curveSegments: 6 });
+        const textGeom = new THREE.ExtrudeGeometry(letterShapes, { depth: options.textDepth + overlap, bevelEnabled: false, curveSegments: 12 });
         textGeom.computeBoundingBox();
         const textCenter = textGeom.boundingBox!.getCenter(new THREE.Vector3());
 
@@ -145,7 +186,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
 
         // Stroke Mask
         const strokeShapes = offsetShapesRobust(letterShapes, options.textStrokeSize);
-        const strokeGeom = new THREE.ExtrudeGeometry(strokeShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
+        const strokeGeom = new THREE.ExtrudeGeometry(strokeShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 12 });
         strokeGeom.translate(-textCenter.x, -centralY, -(options.iconDepth + overlap) / 2);
         textStrokeBrush = new Brush(strokeGeom, new THREE.MeshBasicMaterial());
         textStrokeBrush.position.set(options.textPosX, options.textPosY, topZ - (options.iconDepth - overlap) / 2);
@@ -177,56 +218,30 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
             }
         }
 
-        if (darkShapes.length > 0) {
+        if (darkShapes.length > 0 || lightShapes.length > 0) {
             const scale = Math.max(0, options.width - options.iconMargin * 2) / 512;
             const darkMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
             
-            // 1. Create the main carving volume from dark shapes
-            const darkGeom = new THREE.ExtrudeGeometry(darkShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
-            darkGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
-            let darkBrush = new Brush(darkGeom, darkMat);
-            darkBrush.scale.set(scale, -scale, 1);
-            darkBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
-            darkBrush.updateMatrixWorld();
-
-            // 2. If there are light shapes, they should be "islands" (subtracted from the cutter)
-            if (lightShapes.length > 0) {
-                const lightGeom = new THREE.ExtrudeGeometry(lightShapes, { depth: options.iconDepth + overlap * 2, bevelEnabled: false, curveSegments: 6 });
-                lightGeom.translate(-256, -256, -(options.iconDepth + overlap * 2) / 2);
-                const lightBrush = new Brush(lightGeom, new THREE.MeshBasicMaterial());
-                lightBrush.scale.set(scale, -scale, 1);
-                lightBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
-                lightBrush.updateMatrixWorld();
-
-                // Mask out the eyes/light parts from the cowl carving volume
-                darkBrush = toBrush(evaluator.evaluate(darkBrush, lightBrush, SUBTRACTION));
-            }
-
-            iconCutterBrush = darkBrush;
-
-            // 3. Handle additional holes (internal SVG paths)
-            const holeShapes: THREE.Shape[] = [];
+            // CLEAN ICON VIA 2D BOOLEAN: Subtract light shapes (holes/islands) from dark shapes in 2D
+            // Plus combine any internal holes from the SVG paths themselves
+            const allHoleShapes: THREE.Shape[] = [...lightShapes];
             for (const s of [...darkShapes, ...lightShapes]) {
-                for (const h of s.holes) holeShapes.push(new THREE.Shape(h.getPoints(8)));
+                for (const h of s.holes) {
+                    allHoleShapes.push(new THREE.Shape(h.getPoints(12)));
+                }
             }
-            if (holeShapes.length > 0) {
-                const hGeom = new THREE.ExtrudeGeometry(holeShapes, { depth: options.iconDepth * 2, bevelEnabled: false, curveSegments: 6 });
-                hGeom.translate(-256, -256, -options.iconDepth);
-                iconHoleCutterBrush = new Brush(hGeom, new THREE.MeshBasicMaterial());
-                iconHoleCutterBrush.scale.set(scale, -scale, 1);
-                iconHoleCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ);
-                iconHoleCutterBrush.updateMatrixWorld();
+
+            const combinedDarkShapes = booleanShapesRobust(darkShapes, allHoleShapes, ClipperLib.ClipType.ctDifference);
+            const finalShapes = combinedDarkShapes.length > 0 ? combinedDarkShapes : lightShapes;
+
+            if (finalShapes.length > 0) {
+                const iconGeom = new THREE.ExtrudeGeometry(finalShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 12 });
+                iconGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
+                iconCutterBrush = new Brush(iconGeom, darkMat);
+                iconCutterBrush.scale.set(scale, -scale, 1);
+                iconCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
+                iconCutterBrush.updateMatrixWorld();
             }
-        } else if (lightShapes.length > 0) {
-            // Fallback: If icon is only light shapes, treat them as the carving volume
-            const scale = Math.max(0, options.width - options.iconMargin * 2) / 512;
-            const lightMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-            const lightGeom = new THREE.ExtrudeGeometry(lightShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
-            lightGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
-            iconCutterBrush = new Brush(lightGeom, lightMat);
-            iconCutterBrush.scale.set(scale, -scale, 1);
-            iconCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
-            iconCutterBrush.updateMatrixWorld();
         }
     }
 
@@ -243,18 +258,6 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
             iconCutterBrush = toBrush(evaluator.evaluate(iconCutterBrush, textStrokeBrush, SUBTRACTION));
         }
         masterCutter = iconCutterBrush;
-    }
-    
-    // (B) Subtract Holes from the Icon Volume (so they remain as islands)
-    if (iconHoleCutterBrush) {
-        if (masterCutter) {
-            masterCutter = toBrush(evaluator.evaluate(masterCutter, iconHoleCutterBrush, SUBTRACTION));
-        } else {
-            // If there's no iconCutterBrush, but there are holes, the holes themselves become the master cutter
-            // This case is unlikely given the current logic where iconCutterBrush is usually present if iconHoleCutterBrush is.
-            // However, if it were to happen, we'd treat the holes as the initial cutter.
-            masterCutter = iconHoleCutterBrush;
-        }
     }
     
     if (textCutterBrush) {
