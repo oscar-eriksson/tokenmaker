@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from "svelte";
     import * as THREE from "three";
     import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-    import { tokenConfig, isDragging, isGenerating } from "../stores";
+    import { tokenConfig, isDragging, isGenerating, isEditingLabels } from "../stores";
     import { createTokenGroup } from "../tokenGenerator";
 
     let container: HTMLDivElement;
@@ -43,7 +43,7 @@
         renderer?.dispose();
     });
 
-    $: if (isSceneReady && $tokenConfig && !$isDragging) {
+    $: if (isSceneReady && $tokenConfig && !$isDragging && !$isEditingLabels) {
         updateToken($tokenConfig);
     }
 
@@ -81,7 +81,7 @@
                 width: config.width,
                 height: config.height,
                 svgContent: config.svgContent,
-                label: firstLabel,
+                label: config.skipLabel ? "" : firstLabel,
                 textPosX: config.textPosX,
                 textPosY: config.textPosY,
                 textRotation: config.textRotation,
@@ -158,11 +158,13 @@
             class="interactive-canvas-box"
             style="width: {boxSize}px; height: {boxSize}px;"
             bind:this={container}
-            class:paused={$isDragging || $isGenerating}
+            class:paused={$isDragging || $isGenerating || $isEditingLabels}
         >
             <canvas bind:this={canvas}></canvas>
             {#if $isDragging}
                 <div class="pause-overlay">Paused while dragging 2D layout...</div>
+            {:else if $isEditingLabels}
+                <div class="pause-overlay">Paused while editing labels...</div>
             {:else if $isGenerating}
                 <div class="pause-overlay">
                     <span class="spinner"></span> Generating 3D token...
@@ -174,12 +176,21 @@
 
 <style>
     .preview-container {
-        flex: 1;
+        flex: 1 1 0%;
         display: flex;
         flex-direction: column;
-        height: 100vh;
         background-color: var(--color-background); /* Matches 2D side! */
         position: relative;
+        border-left: 1px solid var(--color-border);
+    }
+
+    /* Remove border when stacked */
+    @media (max-width: 1100px) {
+        .preview-container {
+            border-left: none;
+            border-top: 1px solid var(--color-border);
+            min-height: 400px;
+        }
     }
 
     .header {

@@ -9,9 +9,11 @@ export async function exportTokens(config: any) {
     const zip = new JSZip();
 
     // Parse labels into sequence
-    const labelParts = config.labels.split(',').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+    let labelParts = config.labels.split(',').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
 
-    if (labelParts.length === 0) {
+    if (config.skipLabel) {
+        labelParts = [''];
+    } else if (labelParts.length === 0) {
         labelParts.push('');
     }
 
@@ -38,7 +40,7 @@ export async function exportTokens(config: any) {
                 width: config.width,
                 height: config.height,
                 svgContent: config.svgContent,
-                label: label,
+                label: config.skipLabel ? '' : label,
                 textPosX: config.textPosX,
                 textPosY: config.textPosY,
                 textRotation: config.textRotation,

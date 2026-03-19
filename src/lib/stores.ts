@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 
 export const isDragging = writable(false);
 export const isGenerating = writable(false);
+export const isEditingLabels = writable(false);
 
 export const tokenConfig = writable({
     width: 25,
@@ -19,6 +20,7 @@ export const tokenConfig = writable({
     iconPosY: 0,
     iconMargin: 2, // gap between icon boundary and edge of base cylinder
     iconDepth: 2,
+    skipLabel: false,
 });
 
 export const exportStatus = writable({

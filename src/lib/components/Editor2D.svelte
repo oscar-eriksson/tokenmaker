@@ -27,6 +27,8 @@
 
     // Compute SVG viewBox based on token width
     $: halfW = $tokenConfig.width / 2;
+    $: bevelSize = Math.min(1.0, $tokenConfig.height * 0.15);
+    $: innerR = halfW - bevelSize;
     $: viewSize = $tokenConfig.width + 20; // 10mm padding on each side
     $: viewBox = `-${halfW + 10} -${halfW + 10} ${viewSize} ${viewSize}`;
 
@@ -125,7 +127,6 @@
             class="interactive-svg"
             xmlns="http://www.w3.org/2000/svg"
         >
-            <!-- Grid lines for scale (10mm grid) -->
             <defs>
                 <pattern
                     id="grid"
@@ -141,11 +142,22 @@
                     />
                 </pattern>
 
-                <!-- Clip path to cut the 512x512 game icon into a circle -->
-                <clipPath id="icon-clip">
-                    <circle cx="256" cy="256" r="256" />
-                </clipPath>
+                <radialGradient id="token-chamfer" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+                    <stop offset="0%" stop-color="#ffffff" />
+                    <stop offset="{innerR / halfW * 100}%" stop-color="#ffffff" />
+                    <stop offset="{ (innerR + bevelSize * 0.3) / halfW * 100}%" stop-color="#f0f0f0" />
+                    <stop offset="{ (innerR + bevelSize * 0.7) / halfW * 100}%" stop-color="#cccccc" />
+                    <stop offset="100%" stop-color="#999999" />
+                </radialGradient>
 
+                <mask id="chamfer-mask">
+                    <rect x="-100" y="-100" width="200" height="200" fill="white" />
+                    <circle cx="0" cy="0" r={innerR} fill="black" />
+                </mask>
+
+                <clipPath id="token-boundary">
+                    <circle cx="0" cy="0" r={halfW} />
+                </clipPath>
             </defs>
             <rect
                 x="-1000"
@@ -155,105 +167,112 @@
                 fill="url(#grid)"
             />
 
-            <!-- Token Base -->
+            <!-- Token Base Fill (Underneath everything) -->
             <circle
                 cx="0"
                 cy="0"
                 r={halfW}
-                fill="white"
-                stroke="#111"
-                stroke-width="0.5"
+                fill="#ffffff"
             />
 
-            <!-- ICON (Draggable) -->
-            {#if $tokenConfig.svgContent}
-                <g
-                    class="draggable"
-                    transform="translate({$tokenConfig.iconPosX}, {-$tokenConfig.iconPosY})"
-                    on:mousedown={(e) => onPointerDown(e, "icon")}
-                    on:touchstart={(e) => onPointerDown(e, "icon")}
-                    role="none"
-                >
-                    <!-- Center the 512x512 SVG visually -->
+            <!-- Content Area (Clipped to token boundary) -->
+            <g clip-path="url(#token-boundary)">
+                <!-- ICON (Draggable) -->
+                {#if $tokenConfig.svgContent}
                     <g
-                        transform="translate({-targetIconSize /
-                            2}, {-targetIconSize / 2}) scale({iconScale})"
-                        clip-path="url(#icon-clip)"
+                        class="draggable"
+                        transform="translate({$tokenConfig.iconPosX}, {-$tokenConfig.iconPosY})"
+                        on:mousedown={(e) => onPointerDown(e, "icon")}
+                        on:touchstart={(e) => onPointerDown(e, "icon")}
+                        role="none"
                     >
-                        {#if iconNeedsInvert}
-                            <!-- White-on-black format: invert to show black on white -->
-                            <g style="filter: invert(1)">
-                                {@html iconContent}
-                            </g>
-                        {:else}
-                            <!-- Dark/no-fill format: render directly as black -->
-                            <g fill="black">
-                                {@html iconContent}
-                            </g>
-                        {/if}
+                        <g transform="translate({-targetIconSize / 2}, {-targetIconSize / 2}) scale({iconScale})">
+                            {#if iconNeedsInvert}
+                                <g style="filter: invert(1)">
+                                    {@html iconContent}
+                                </g>
+                            {:else}
+                                <g fill="#333">
+                                    {@html iconContent}
+                                </g>
+                            {/if}
+                        </g>
+                        <!-- Hover Box -->
+                        <rect
+                            x={-targetIconSize / 2}
+                            y={-targetIconSize / 2}
+                            width={targetIconSize}
+                            height={targetIconSize}
+                            fill="transparent"
+                            stroke="#3b82f6"
+                            stroke-width="0.5"
+                            stroke-dasharray="2,2"
+                            class="hover-box"
+                        />
                     </g>
-                    <!-- Hover/Active outline box -->
-                    <rect
-                        x={-targetIconSize / 2}
-                        y={-targetIconSize / 2}
-                        width={targetIconSize}
-                        height={targetIconSize}
-                        fill="transparent"
-                        stroke="#3b82f6"
-                        stroke-width="0.5"
-                        stroke-dasharray="2,2"
-                        class="hover-box"
-                    />
-                </g>
-            {/if}
+                {/if}
 
-            <!-- TEXT (Draggable) -->
-            {#if $tokenConfig.labels}
-                <g
-                    class="draggable"
-                    transform="translate({$tokenConfig.textPosX}, {-$tokenConfig.textPosY}) rotate({-$tokenConfig.textRotation})"
-                    on:mousedown={(e) => onPointerDown(e, "text")}
-                    on:touchstart={(e) => onPointerDown(e, "text")}
-                    role="none"
-                >
-                    <text
-                        x="0"
-                        y="0"
-                        text-anchor="middle"
-                        dominant-baseline="central"
-                        font-family="'Roboto Black', Arial Black, sans-serif"
-                        font-weight="900"
-                        font-size={$tokenConfig.textSize}
-                        fill="black"
-                        stroke="white"
-                        stroke-width={$tokenConfig.textStrokeSize * 2}
-                        stroke-linejoin="round"
-                        paint-order="stroke"
+                <!-- TEXT (Draggable) -->
+                {#if $tokenConfig.labels && !$tokenConfig.skipLabel}
+                    <g
+                        class="draggable"
+                        transform="translate({$tokenConfig.textPosX}, {-$tokenConfig.textPosY}) rotate({-$tokenConfig.textRotation})"
+                        on:mousedown={(e) => onPointerDown(e, "text")}
+                        on:touchstart={(e) => onPointerDown(e, "text")}
+                        role="none"
                     >
-                        {$tokenConfig.labels.split(",")[0].trim() || "A"}
-                    </text>
-                    <!-- Hover/Active outline box -->
-                    <circle
-                        cx="0"
-                        cy="0"
-                        r="2"
-                        fill="#3b82f6"
-                        class="hover-box"
-                    />
-                </g>
-            {/if}
+                        <text
+                            x="0"
+                            y="0"
+                            text-anchor="middle"
+                            dominant-baseline="central"
+                            font-family="'Roboto Black', Arial Black, sans-serif"
+                            font-weight="900"
+                            font-size={$tokenConfig.textSize}
+                            fill="#333"
+                            stroke="white"
+                            stroke-width={$tokenConfig.textStrokeSize * 2}
+                            stroke-linejoin="round"
+                            paint-order="stroke"
+                        >
+                            {$tokenConfig.labels.split(",")[0].trim() || "A"}
+                        </text>
+                        <circle cx="0" cy="0" r="2" fill="#3b82f6" class="hover-box" />
+                    </g>
+                {/if}
+            </g>
+
+            <!-- Chamfer Rendered On Top (Masked to show only the edge) -->
+            <circle
+                cx="0"
+                cy="0"
+                r={halfW}
+                fill="url(#token-chamfer)"
+                mask="url(#chamfer-mask)"
+                pointer-events="none"
+            />
+
+            <!-- Thin soft edge border -->
+            <circle
+                cx="0"
+                cy="0"
+                r={halfW}
+                fill="none"
+                stroke="#888"
+                stroke-width="0.05"
+                pointer-events="none"
+            />
         </svg>
     </div>
 </div>
 
 <style>
     .editor-container {
-        flex: 1;
+        flex: 1 1 0%;
         display: flex;
         flex-direction: column;
         background-color: var(--color-background);
-        border-right: 1px solid var(--color-border);
-        min-width: 300px;
+        overflow: hidden;
     }
 
     .header {

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tokenConfig, exportStatus, isGenerating } from "../stores";
+    import { tokenConfig, exportStatus, isGenerating, isEditingLabels } from "../stores";
     const buildDate = __BUILD_DATE__;
     const appVersion = __APP_VERSION__;
     import { exportTokens } from "../exportTokens";
@@ -180,8 +180,16 @@
                 id="labels"
                 type="text"
                 bind:value={$tokenConfig.labels}
+                on:focus={() => isEditingLabels.set(true)}
+                on:blur={() => isEditingLabels.set(false)}
                 placeholder="e.g. A, B, C or 1, 2, 3"
+                disabled={$tokenConfig.skipLabel}
+                class:disabled={$tokenConfig.skipLabel}
             />
+            <label class="checkbox-container">
+                <input type="checkbox" bind:checked={$tokenConfig.skipLabel} />
+                <span class="checkbox-label">Skip Label (Icon only)</span>
+            </label>
         </div>
 
         <div class="control-group">
@@ -278,7 +286,7 @@
             disabled={$exportStatus.active}
             style="width: 100%; margin-bottom: 1rem;"
         >
-            {$exportStatus.active ? 'Exporting...' : 'Export STL Sequence'}
+            {$exportStatus.active ? 'Exporting...' : ($tokenConfig.skipLabel ? 'Export STL (No Label)' : 'Export STL Sequence')}
         </button>
 
         <footer class="panel-footer">
@@ -353,8 +361,8 @@
             <p>Processing: <span class="label-badge">{$exportStatus.label}</span></p>
             <div class="progress-container">
                 <div class="progress-bar">
-                    <div 
-                        class="progress-fill" 
+                    <div
+                        class="progress-fill"
                         style="width: {($exportStatus.current / $exportStatus.total) * 100}%"
                     ></div>
                 </div>
@@ -497,6 +505,38 @@
         color: var(--color-primary);
     }
 
+    input[type="text"]:focus,
+    input[type="number"]:focus {
+        border-color: var(--color-primary);
+        background: white;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    input.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background: #f9fafb;
+    }
+
+    .checkbox-container {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-top: var(--space-2);
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .checkbox-container input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+    }
+
+    .checkbox-label {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+    }
     .credits {
         text-align: right;
         opacity: 0.8;
