@@ -10,7 +10,7 @@
 
     let renderer: THREE.WebGLRenderer;
     let scene: THREE.Scene;
-    let camera: THREE.PerspectiveCamera;
+    let camera: THREE.OrthographicCamera;
     let controls: OrbitControls;
     let currentTokenGroup: THREE.Group | null = null;
     let isSceneReady = false;
@@ -47,10 +47,18 @@
         updateToken($tokenConfig);
     }
 
-    // Force renderer to strictly follow the 1:1 Svelte layout constraints
-    $: if (renderer && camera && boxSize > 10) {
-        camera.aspect = 1; /* It's guaranteed to be a square container! */
+    // Keep orthographic camera frustum synced with token size (match 2D viewBox: width + 20mm padding)
+    $: if (camera && $tokenConfig) {
+        const d = $tokenConfig.width / 2 + 10;
+        camera.left = -d;
+        camera.right = d;
+        camera.top = d;
+        camera.bottom = -d;
         camera.updateProjectionMatrix();
+    }
+
+    // Force renderer to strictly follow the 1:1 Svelte layout constraints
+    $: if (renderer && boxSize > 10) {
         renderer.setSize(boxSize, boxSize);
     }
 
@@ -92,10 +100,13 @@
         scene = new THREE.Scene();
         // We leave scene.background empty so the CSS background-color shines through!
 
-        camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-        // Position camera to look top-down-ish
-        camera.position.set(0, -40, 40);
-        camera.up.set(0, 0, 1);
+        // Orthographic camera: 1 world unit = 1mm, frustum sized to match 2D viewBox
+        const d = 22.5; // default half-size (25mm token + 10mm padding each side) — updated reactively
+        camera = new THREE.OrthographicCamera(-d, d, d, -d, 0.1, 1000);
+        // Near top-down view (5° tilt) so X/Y proportions match the 2D editor.
+        // camera.up = (0,1,0) because (0,0,1) would be collinear with the view direction.
+        camera.position.set(0, -5, 55);
+        camera.up.set(0, 1, 0);
 
         renderer = new THREE.WebGLRenderer({
             canvas,
@@ -111,11 +122,8 @@
     }
 
     function handleResize() {
-        // Redundant since boxSize handles 1:1 bounds, but good fallback
         if (!container || !camera || !renderer) return;
         if (boxSize > 10) {
-            camera.aspect = 1;
-            camera.updateProjectionMatrix();
             renderer.setSize(boxSize, boxSize);
         }
     }
