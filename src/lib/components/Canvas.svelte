@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from "svelte";
     import * as THREE from "three";
     import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-    import { tokenConfig } from "../stores";
+    import { tokenConfig, isDragging } from "../stores";
     import { createTokenGroup } from "../tokenGenerator";
 
     let container: HTMLDivElement;
@@ -14,6 +14,7 @@
     let controls: OrbitControls;
     let currentTokenGroup: THREE.Group | null = null;
     let isSceneReady = false;
+    let isGenerating = false;
 
     // Responsive container bounds
     let wrapperW = 0;
@@ -43,7 +44,7 @@
         renderer?.dispose();
     });
 
-    $: if (isSceneReady && $tokenConfig) {
+    $: if (isSceneReady && $tokenConfig && !$isDragging) {
         updateToken($tokenConfig);
     }
 
@@ -65,32 +66,40 @@
     async function updateToken(config: any) {
         if (!scene) return;
 
-        if (currentTokenGroup) {
-            scene.remove(currentTokenGroup);
-            currentTokenGroup = null;
+        isGenerating = true;
+        // Yield thread so Svelte can render the UI change before CPU blocks
+        await new Promise(r => setTimeout(r, 10));
+
+        try {
+            if (currentTokenGroup) {
+                scene.remove(currentTokenGroup);
+                currentTokenGroup = null;
+            }
+
+            const firstLabel = (config.labels || "").split(",")[0].trim();
+
+            const group = await createTokenGroup({
+                width: config.width,
+                height: config.height,
+                svgContent: config.svgContent,
+                label: firstLabel,
+                textPosX: config.textPosX,
+                textPosY: config.textPosY,
+                textRotation: config.textRotation,
+                textSize: config.textSize,
+                textDepth: config.textDepth,
+                textStrokeSize: config.textStrokeSize,
+                iconPosX: config.iconPosX,
+                iconPosY: config.iconPosY,
+                iconMargin: config.iconMargin,
+                iconDepth: config.iconDepth,
+            });
+
+            currentTokenGroup = group;
+            scene.add(group);
+        } finally {
+            isGenerating = false;
         }
-
-        const firstLabel = (config.labels || "").split(",")[0].trim();
-
-        const group = await createTokenGroup({
-            width: config.width,
-            height: config.height,
-            svgContent: config.svgContent,
-            label: firstLabel,
-            textPosX: config.textPosX,
-            textPosY: config.textPosY,
-            textRotation: config.textRotation,
-            textSize: config.textSize,
-            textDepth: config.textDepth,
-            textStrokeSize: config.textStrokeSize,
-            iconPosX: config.iconPosX,
-            iconPosY: config.iconPosY,
-            iconMargin: config.iconMargin,
-            iconDepth: config.iconDepth,
-        });
-
-        currentTokenGroup = group;
-        scene.add(group);
     }
 
     function initThreeJS() {
@@ -150,8 +159,16 @@
             class="interactive-canvas-box"
             style="width: {boxSize}px; height: {boxSize}px;"
             bind:this={container}
+            class:paused={$isDragging || isGenerating}
         >
             <canvas bind:this={canvas}></canvas>
+            {#if $isDragging}
+                <div class="pause-overlay">Paused while dragging 2D layout...</div>
+            {:else if isGenerating}
+                <div class="pause-overlay">
+                    <span class="spinner"></span> Generating 3D token...
+                </div>
+            {/if}
         </div>
     </div>
 </div>
@@ -210,11 +227,47 @@
     .interactive-canvas-box {
         /* Width and height are set inline dynamically via Svelte to maintain 1:1 aspect bounding box */
         box-shadow: var(--shadow-sm);
-        background-color: white;
+        background-color: #f5f5f5;
         border-radius: var(--radius-md);
         border: 1px solid var(--color-border);
         overflow: hidden; /* So canvas stays inside rounded corners */
         position: relative;
+        transition: opacity 0.2s;
+    }
+
+    .interactive-canvas-box.paused {
+        opacity: 0.6;
+    }
+
+    .pause-overlay {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-weight: bold;
+        pointer-events: none;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+    }
+
+    .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 1s linear infinite;
+        margin-right: 8px;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
     }
 
     canvas {

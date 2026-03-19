@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tokenConfig } from "../stores";
+    import { tokenConfig, isDragging } from "../stores";
 
     let svgElement: SVGSVGElement;
 
@@ -62,6 +62,7 @@
         target: "icon" | "text",
     ) {
         draggingTarget = target;
+        isDragging.set(true);
         const coords = getMouseCoords(e);
         startMouseX = coords.x;
         startMouseY = coords.y;
@@ -100,6 +101,7 @@
 
     function onPointerUp() {
         draggingTarget = null;
+        isDragging.set(false);
     }
 </script>
 

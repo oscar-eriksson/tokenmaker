@@ -4,44 +4,50 @@ import { Font } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TTFLoader } from 'three/examples/jsm/loaders/TTFLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import { SUBTRACTION, INTERSECTION, ADDITION, Evaluator, Brush } from 'three-bvh-csg';
+import * as ClipperLib from 'clipper-lib';
 
-// Uniformly offset a 2D polygon outline by `amount` using miter/bevel joins.
-// Bevel join is used when the miter would exceed 2× the offset (matches SVG miter-limit=2),
-// which avoids giant spikes at acute corners (e.g. apex of "A") that would widen the 3D cutter
-// far beyond the 2D stroke-linejoin:round appearance.
-function offsetContour(pts: THREE.Vector2[], amount: number): THREE.Vector2[] {
-    const n = pts.length;
-    const result: THREE.Vector2[] = [];
-    for (let i = 0; i < n; i++) {
-        const a = pts[(i - 1 + n) % n];
-        const b = pts[i];
-        const c = pts[(i + 1) % n];
-        const e1 = new THREE.Vector2(b.x - a.x, b.y - a.y);
-        const e2 = new THREE.Vector2(c.x - b.x, c.y - b.y);
-        if (e1.length() < 1e-9 || e2.length() < 1e-9) { result.push(b.clone()); continue; }
-        e1.normalize(); e2.normalize();
-        // Left-hand normals — outward for CCW polygon in Y-up coords
-        const n1x = -e1.y, n1y = e1.x;
-        const n2x = -e2.y, n2y = e2.x;
-        // Miter bisector
-        const bx = n1x + n2x, by = n1y + n2y;
-        const bLen = Math.sqrt(bx * bx + by * by);
-        if (bLen < 1e-6) {
-            result.push(new THREE.Vector2(b.x + n1x * amount, b.y + n1y * amount));
-        } else {
-            const bnx = bx / bLen, bny = by / bLen;
-            const dot = bnx * n1x + bny * n1y;
-            // Cap miter at 2× the offset (SVG default miter-limit ≈ 2) to avoid spikes at acute
-            // corners. Two-vertex bevel join was avoided because it self-intersects at concave
-            // corners in glyph outlines (e.g. serif feet), producing broken geometry.
-            const miter = amount / Math.max(dot, 0.5);
-            result.push(new THREE.Vector2(b.x + bnx * miter, b.y + bny * miter));
+// Robust 2D polygon offsetting using ClipperLib
+function offsetShapesRobust(shapes: THREE.Shape[], amount: number): THREE.Shape[] {
+    const scale = 100000;
+    const co = new ClipperLib.ClipperOffset();
+    const joinType = ClipperLib.JoinType.jtRound;
+    const endType = ClipperLib.EndType.etClosedPolygon;
+
+    const paths: any[][] = [];
+    for (const shape of shapes) {
+        const outerPts = shape.getPoints(12); // Reduced from 24
+        paths.push(outerPts.map(p => ({ X: Math.round(p.x * scale), Y: Math.round(p.y * scale) })));
+        if (shape.holes && shape.holes.length > 0) {
+            for (const hole of shape.holes) {
+                const holePts = hole.getPoints(12);
+                paths.push(holePts.map(p => ({ X: Math.round(p.x * scale), Y: Math.round(p.y * scale) })));
+            }
         }
     }
-    return result;
+
+    co.AddPaths(paths, joinType, endType);
+    const solutionTree = new ClipperLib.PolyTree();
+    co.Execute(solutionTree, amount * scale);
+    const resultShapes: THREE.Shape[] = [];
+
+    function parseNode(node: any) {
+        if (!node.IsHole()) {
+            const shapePts = node.Contour().map((pt: any) => new THREE.Vector2(pt.X / scale, pt.Y / scale));
+            const shape = new THREE.Shape(shapePts);
+            for (const child of node.Childs()) {
+                const holePts = child.Contour().map((pt: any) => new THREE.Vector2(pt.X / scale, pt.Y / scale));
+                shape.holes.push(new THREE.Path(holePts));
+                for (const island of child.Childs()) {
+                    parseNode(island);
+                }
+            }
+            resultShapes.push(shape);
+        }
+    }
+    for (const child of solutionTree.Childs()) parseNode(child);
+    return resultShapes;
 }
 
-// Helper to safely convert evaluated meshes back into CSG Brushes for continuous grouping
 function toBrush(mesh: THREE.Mesh | Brush): Brush {
     if (mesh instanceof Brush) {
         mesh.updateMatrixWorld();
@@ -56,21 +62,14 @@ function toBrush(mesh: THREE.Mesh | Brush): Brush {
 }
 
 let cachedFont: Font | null = null;
-
 export async function loadFont(): Promise<Font> {
     if (cachedFont) return cachedFont;
-
     return new Promise((resolve, reject) => {
         const loader = new TTFLoader();
-        loader.load(
-            '/fonts/Roboto-Black.ttf',
-            (json) => {
-                cachedFont = new Font(json);
-                resolve(cachedFont);
-            },
-            undefined,
-            (err) => reject(err)
-        );
+        loader.load('/fonts/Roboto-Black.ttf', (json) => {
+            cachedFont = new Font(json);
+            resolve(cachedFont);
+        }, undefined, (err) => reject(err));
     });
 }
 
@@ -87,241 +86,187 @@ export interface TokenOptions {
     textStrokeSize: number;
     iconPosX: number;
     iconPosY: number;
-    iconMargin: number; // Space around the icon (so it doesn't scrape the edge)
+    iconMargin: number;
     iconDepth: number;
 }
 
 export async function createTokenGroup(options: TokenOptions): Promise<THREE.Group> {
     const group = new THREE.Group();
-    const overlap = 0.1; // 0.1mm overlap for tight, manifold CSG unions
+    const overlap = 0.1;
 
-    // 1. Base with fillets — extrude a circle along Z with bevel so the top/bottom
-    //    edges are rounded (fillet radius ≈ 15% of height, capped at 1 mm).
+    // 1. Base
     const radius = options.width / 2;
     const filletR = Math.min(1.0, options.height * 0.15);
-    const baseDepth = Math.max(0.5, options.height - 2 * filletR); // straight-wall section
+    const baseDepth = Math.max(0.5, options.height - 2 * filletR);
     const circleShape = new THREE.Shape();
     circleShape.absarc(0, 0, radius, 0, Math.PI * 2, false);
     const baseGeom = new THREE.ExtrudeGeometry(circleShape, {
         depth: baseDepth,
-        curveSegments: 64,
+        curveSegments: 32, // Further optimized
         bevelEnabled: true,
         bevelSize: filletR,
         bevelThickness: filletR,
-        bevelSegments: 5,
+        bevelSegments: 3,
     });
-    // Total Z extent = 2*filletR + baseDepth = options.height; centre at z = 0
-    baseGeom.translate(0, 0, -(options.height / 2));
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-    const baseMesh = new THREE.Mesh(baseGeom, baseMat);
+    baseGeom.translate(0, 0, -baseDepth / 2);
+    const baseMesh = new THREE.Mesh(baseGeom, new THREE.MeshStandardMaterial({ color: 0xffffff }));
     baseMesh.updateMatrixWorld();
 
     let finalTokenMesh: THREE.Mesh = baseMesh;
     const evaluator = new Evaluator();
-    evaluator.useGroups = true; // VERY IMPORTANT: Preserves multi-materials (colors) physically!
+    evaluator.useGroups = true;
 
-    // Z position for features to sit on top of the base
     const topZ = options.height / 2;
 
-    // 2. Text Label — solid embossed letter, with outer cutter to carve into icon
-    let iconMesh: THREE.Mesh | null = null;
-    let textMeshToRender: THREE.Mesh | null = null;
-    let textOuterCutterBrush: Brush | null = null;
+    // 2. Text Prep
+    let textCutterBrush: Brush | null = null;
+    let textStrokeBrush: Brush | null = null;
 
     if (options.label.trim().length > 0) {
         const font = await loadFont();
-        // Bevel gives the letter rounded top edges matching the 2D stroke-linejoin:round look.
-        // Keep bevel small so it doesn't extend past the cutter boundary (avoids CSG artifacts).
-        // Subtract 2×bevelSz from depth so the total Z span stays exactly textDepth
-        // (ExtrudeGeometry adds bevelThickness to both front and back, so depth + 2×BT = textDepth).
-        const bevelSz = Math.max(0, Math.min(options.textStrokeSize * 0.4, options.textDepth * 0.35));
-        // Three.js TTFLoader uses scale = 100000/(UPM*72) instead of 1000/UPM, making text render
-        // 100/72 ≈ 1.389× larger than the equivalent CSS font-size. Compensate so size=N in 3D
-        // matches font-size=N in the 2D SVG preview.
         const ttfSize = options.textSize * (72 / 100);
-        const textGeom = new TextGeometry(options.label, {
-            font: font,
-            size: ttfSize,
-            depth: Math.max(0.1, options.textDepth + overlap - 2 * bevelSz),
-            curveSegments: 12,
-            bevelEnabled: bevelSz > 0,
-            bevelSize: bevelSz,
-            bevelThickness: bevelSz,
-            bevelSegments: 3,
-        });
+        const letterShapes = font.generateShapes(options.label, ttfSize);
+
+        const textGeom = new THREE.ExtrudeGeometry(letterShapes, { depth: options.textDepth + overlap, bevelEnabled: false, curveSegments: 6 });
         textGeom.computeBoundingBox();
         const textCenter = textGeom.boundingBox!.getCenter(new THREE.Vector3());
-        textGeom.translate(-textCenter.x, -textCenter.y, -(options.textDepth + overlap) / 2);
-        const textMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
-        textMeshToRender = new THREE.Mesh(textGeom, textMat);
-        textMeshToRender.position.set(options.textPosX, options.textPosY, topZ + (options.textDepth - overlap) / 2 - overlap);
-        textMeshToRender.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
 
-        // Outer cutter: per-edge uniform offset (not font-size scaling) so that the stroke
-        // is the same width on ALL sides of each letter stroke, not dependent on distance
-        // from the bounding box center.
-        const letterShapes = font.generateShapes(options.label, ttfSize);
-        // Cutter must expand by (strokeAmt + bevelSz) so the visible white channel =
-        // (strokeAmt + bevelSz) - bevelSz = strokeAmt — matching the 2D stroke width exactly.
-        const strokeAmt = options.textStrokeSize + bevelSz;
-        const outerOnlyShapes = letterShapes.map(s => {
-            const pts = s.getPoints(12);
-            const expanded = offsetContour(pts, strokeAmt);
-            return new THREE.Shape(expanded);
-        });
+        const fData = (font as any).data;
+        const scaleFact = ttfSize / (fData.resolution || 1000);
+        const centralY = (((fData.ascender || 800) + (fData.descender || -200)) / 2) * scaleFact;
 
-        // Depth: spans from base bottom through icon top, no larger than needed
-        const cutDepth = options.height + options.iconDepth + 1;
-        const cutterGeom = new THREE.ExtrudeGeometry(outerOnlyShapes, { depth: cutDepth, bevelEnabled: false });
-        cutterGeom.computeBoundingBox();
-        const cutterCenter = cutterGeom.boundingBox!.getCenter(new THREE.Vector3());
-        cutterGeom.translate(-cutterCenter.x, -cutterCenter.y, -cutDepth / 2);
-        textOuterCutterBrush = new Brush(cutterGeom, new THREE.MeshBasicMaterial());
-        textOuterCutterBrush.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
-        // Position cutter center halfway between base-bottom and icon-top
-        textOuterCutterBrush.position.set(options.textPosX, options.textPosY, options.iconDepth / 2);
-        textOuterCutterBrush.updateMatrixWorld();
+        textGeom.translate(-textCenter.x, -centralY, -(options.textDepth + overlap) / 2);
+        
+        const textMesh = new THREE.Mesh(textGeom, new THREE.MeshStandardMaterial({ color: 0x222222 }));
+        textMesh.position.set(options.textPosX, options.textPosY, topZ - options.textDepth / 2);
+        textMesh.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
+        textMesh.updateMatrixWorld();
+        textCutterBrush = toBrush(textMesh);
+
+        // Stroke Mask
+        const strokeShapes = offsetShapesRobust(letterShapes, options.textStrokeSize);
+        const strokeGeom = new THREE.ExtrudeGeometry(strokeShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
+        strokeGeom.translate(-textCenter.x, -centralY, -(options.iconDepth + overlap) / 2);
+        textStrokeBrush = new Brush(strokeGeom, new THREE.MeshBasicMaterial());
+        textStrokeBrush.position.set(options.textPosX, options.textPosY, topZ - (options.iconDepth - overlap) / 2);
+        textStrokeBrush.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
+        textStrokeBrush.updateMatrixWorld();
     }
 
-    // 3. Icon (SVG) - Rendered after text to apply CSG cut
-    let darkCutterBrush: Brush | null = null;
+    // 3. Icon Prep
+    let iconCutterBrush: Brush | null = null;
+    let iconHoleCutterBrush: Brush | null = null;
     if (options.svgContent) {
         const loader = new SVGLoader();
         const svgData = loader.parse(options.svgContent);
-
-        const material = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        const allShapes: THREE.Shape[] = [];
-
         const lightShapes: THREE.Shape[] = [];
         const darkShapes: THREE.Shape[] = [];
-        const allNonBgShapes: THREE.Shape[] = [];
 
         for (const path of svgData.paths) {
-            const c = path.color;
-            const luminance = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
-
+            const luminance = 0.299 * path.color.r + 0.587 * path.color.g + 0.114 * path.color.b;
             const shapes = SVGLoader.createShapes(path);
             for (const shape of shapes) {
                 const shapeGeom = new THREE.ShapeGeometry(shape);
                 shapeGeom.computeBoundingBox();
                 if (shapeGeom.boundingBox) {
                     const box = shapeGeom.boundingBox;
-                    const w = box.max.x - box.min.x;
-                    const h = box.max.y - box.min.y;
-                    if (w >= 510 && h >= 510 && shape.holes.length === 0) {
-                        continue; // skip full-canvas background fills
-                    }
+                    if (box.max.x - box.min.x >= 510) continue;
                 }
-                allNonBgShapes.push(shape);
-                if (luminance >= 0.5) {
-                    lightShapes.push(shape); // white/light = raised silhouette
-                } else {
-                    darkShapes.push(shape);  // dark = cutout areas
-                }
+                if (luminance >= 0.5) lightShapes.push(shape);
+                else darkShapes.push(shape);
             }
         }
 
-        // Use light paths for extrusion; fall back to all if SVG is dark-only (custom SVGs)
-        const useLight = lightShapes.length > 0;
-        for (const shape of (useLight ? lightShapes : allNonBgShapes)) {
-            allShapes.push(shape);
-        }
+        if (darkShapes.length > 0) {
+            const scale = Math.max(0, options.width - options.iconMargin * 2) / 512;
+            const darkMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            
+            // 1. Create the main carving volume from dark shapes
+            const darkGeom = new THREE.ExtrudeGeometry(darkShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
+            darkGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
+            let darkBrush = new Brush(darkGeom, darkMat);
+            darkBrush.scale.set(scale, -scale, 1);
+            darkBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
+            darkBrush.updateMatrixWorld();
 
-        if (allShapes.length > 0) {
-            // Compute 2D bounds from shapes (no temp geometry needed)
-            const bbox2 = new THREE.Box2();
-            for (const shape of allShapes) {
-                for (const pt of shape.getPoints()) bbox2.expandByPoint(pt);
+            // 2. If there are light shapes, they should be "islands" (subtracted from the cutter)
+            if (lightShapes.length > 0) {
+                const lightGeom = new THREE.ExtrudeGeometry(lightShapes, { depth: options.iconDepth + overlap * 2, bevelEnabled: false, curveSegments: 6 });
+                lightGeom.translate(-256, -256, -(options.iconDepth + overlap * 2) / 2);
+                const lightBrush = new Brush(lightGeom, new THREE.MeshBasicMaterial());
+                lightBrush.scale.set(scale, -scale, 1);
+                lightBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
+                lightBrush.updateMatrixWorld();
+
+                // Mask out the eyes/light parts from the cowl carving volume
+                darkBrush = toBrush(evaluator.evaluate(darkBrush, lightBrush, SUBTRACTION));
             }
-            const center2 = bbox2.getCenter(new THREE.Vector2());
-            const size2 = bbox2.getSize(new THREE.Vector2());
-            const maxDim = Math.max(size2.x, size2.y);
-            const scale = Math.max(0, options.width - options.iconMargin * 2) / maxDim;
 
-            // Icon fillet: round the top edges of the raised icon.
-            // bevelSize is in SVG units (XY scaled by `scale`); bevelThickness is in mm (Z not scaled).
-            // Subtract 2×iconFilletMM from depth so total Z span stays exactly iconDepth + overlap.
-            const iconFilletMM = 0.3;
-            const iconBevelXY = scale > 0 ? iconFilletMM / scale : 0;
+            iconCutterBrush = darkBrush;
 
-            const iconGeom = new THREE.ExtrudeGeometry(allShapes, {
-                depth: Math.max(0.1, options.iconDepth + overlap - 2 * iconFilletMM),
-                bevelEnabled: true,
-                bevelSize: iconBevelXY,
-                bevelThickness: iconFilletMM,
-                bevelSegments: 3,
-            });
-
-            iconMesh = new THREE.Mesh(iconGeom, material);
-            iconGeom.translate(-center2.x, -center2.y, -(options.iconDepth + overlap) / 2);
-
-            iconMesh.scale.set(scale, -scale, 1);
-            // Push icon down by `overlap` so it embeds into the base cleanly
-            iconMesh.position.set(options.iconPosX, options.iconPosY, topZ + (options.iconDepth - overlap) / 2 - overlap);
-            iconMesh.updateMatrixWorld();
-
-            // Build cutter for: dark paths + compound-path holes from light shapes
-            // Applied AFTER union so it cuts below the base surface (true recesses)
-            const allCutoutShapes: THREE.Shape[] = [...(useLight ? darkShapes : [])];
-            if (useLight) {
-                for (const shape of lightShapes) {
-                    for (const hole of shape.holes) {
-                        allCutoutShapes.push(new THREE.Shape(hole.getPoints(12)));
-                    }
-                }
+            // 3. Handle additional holes (internal SVG paths)
+            const holeShapes: THREE.Shape[] = [];
+            for (const s of [...darkShapes, ...lightShapes]) {
+                for (const h of s.holes) holeShapes.push(new THREE.Shape(h.getPoints(8)));
             }
-            if (allCutoutShapes.length > 0) {
-                // Depth spans iconDepth above the surface + iconDepth below = clear recess
-                const cutterDepth = options.iconDepth * 2 + overlap;
-                const cutterGeom = new THREE.ExtrudeGeometry(allCutoutShapes, {
-                    depth: cutterDepth,
-                    bevelEnabled: false,
-                });
-                cutterGeom.translate(-center2.x, -center2.y, -cutterDepth / 2);
-                darkCutterBrush = new Brush(cutterGeom, new THREE.MeshBasicMaterial());
-                darkCutterBrush.scale.set(scale, -scale, 1);
-                // Position at topZ so cutter spans iconDepth above and below the surface
-                darkCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ + overlap / 2);
-                darkCutterBrush.updateMatrixWorld();
+            if (holeShapes.length > 0) {
+                const hGeom = new THREE.ExtrudeGeometry(holeShapes, { depth: options.iconDepth * 2, bevelEnabled: false, curveSegments: 6 });
+                hGeom.translate(-256, -256, -options.iconDepth);
+                iconHoleCutterBrush = new Brush(hGeom, new THREE.MeshBasicMaterial());
+                iconHoleCutterBrush.scale.set(scale, -scale, 1);
+                iconHoleCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ);
+                iconHoleCutterBrush.updateMatrixWorld();
             }
+        } else if (lightShapes.length > 0) {
+            // Fallback: If icon is only light shapes, treat them as the carving volume
+            const scale = Math.max(0, options.width - options.iconMargin * 2) / 512;
+            const lightMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const lightGeom = new THREE.ExtrudeGeometry(lightShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 6 });
+            lightGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
+            iconCutterBrush = new Brush(lightGeom, lightMat);
+            iconCutterBrush.scale.set(scale, -scale, 1);
+            iconCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
+            iconCutterBrush.updateMatrixWorld();
         }
     }
 
-    // 4. Sequentially UNION everything via CSG to guarantee a Manifold STL Export
-    // (A) Merge Vector Icon into Base
-    if (iconMesh) {
-        let finalIconBrush = toBrush(iconMesh);
+    // 4. Combined Boolean
+    const safetyBrush = new Brush(new THREE.CylinderGeometry(radius + filletR, radius + filletR, options.height * 2, 32), new THREE.MeshBasicMaterial());
+    safetyBrush.rotateX(Math.PI / 2);
+    safetyBrush.updateMatrixWorld();
 
-        // Clip Icon bounds to Token Radius Margin
-        const innerRadius = Math.max(0, radius - options.iconMargin);
-        const clipGeom = new THREE.CylinderGeometry(innerRadius, innerRadius, options.height * 10, 64);
-        clipGeom.rotateX(Math.PI / 2);
-        const clipBrush = new Brush(clipGeom, new THREE.MeshBasicMaterial());
-        clipBrush.position.z = 0;
-        clipBrush.updateMatrixWorld();
-
-        finalIconBrush = toBrush(evaluator.evaluate(finalIconBrush, clipBrush, INTERSECTION));
-
-        // Union the icon onto the base
-        finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), finalIconBrush, ADDITION);
-
-        // Subtract dark/hole areas AFTER union so they cut below the base surface (true recesses)
-        if (darkCutterBrush) {
-            finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), darkCutterBrush, SUBTRACTION);
+    evaluator.useGroups = true; // Use groups throughout to preserve visual contrast
+    let masterCutter: Brush | null = null;
+    
+    if (iconCutterBrush) {
+        if (textStrokeBrush) {
+            iconCutterBrush = toBrush(evaluator.evaluate(iconCutterBrush, textStrokeBrush, SUBTRACTION));
+        }
+        masterCutter = iconCutterBrush;
+    }
+    
+    // (B) Subtract Holes from the Icon Volume (so they remain as islands)
+    if (iconHoleCutterBrush) {
+        if (masterCutter) {
+            masterCutter = toBrush(evaluator.evaluate(masterCutter, iconHoleCutterBrush, SUBTRACTION));
+        } else {
+            // If there's no iconCutterBrush, but there are holes, the holes themselves become the master cutter
+            // This case is unlikely given the current logic where iconCutterBrush is usually present if iconHoleCutterBrush is.
+            // However, if it were to happen, we'd treat the holes as the initial cutter.
+            masterCutter = iconHoleCutterBrush;
         }
     }
-
-    // (B) Carve letter footprint from icon/base, then union solid text back
-    // This creates recesses for the counter (e.g. center of "A") and a stroke margin
-    if (textMeshToRender) {
-        if (textOuterCutterBrush) {
-            finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), textOuterCutterBrush, SUBTRACTION);
-        }
-        finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), toBrush(textMeshToRender), ADDITION);
+    
+    if (textCutterBrush) {
+        masterCutter = masterCutter ? toBrush(evaluator.evaluate(masterCutter, textCutterBrush, ADDITION)) : textCutterBrush;
     }
 
-    // Add the single, unified, manifold mesh to the scene
+    if (masterCutter) {
+        evaluator.useGroups = true; // Use groups for final cut
+        const clamped = evaluator.evaluate(masterCutter, safetyBrush, INTERSECTION);
+        finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), toBrush(clamped), SUBTRACTION);
+    }
+
     group.add(finalTokenMesh);
-
     return group;
 }
