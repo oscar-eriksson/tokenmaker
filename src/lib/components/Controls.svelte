@@ -131,7 +131,7 @@
         </div>
 
         <div class="control-group">
-            <label class="control-label">Base Dimensions (mm)</label>
+            <span class="control-label">Base Dimensions (mm)</span>
             <div class="grid-2">
                 <div>
                     <label class="control-label" for="width"
@@ -339,18 +339,34 @@
 {#if $exportStatus.active}
     <div class="export-overlay">
         <div class="export-card">
-            <div class="spinner"></div>
-            <h3>Building STL Sequence</h3>
-            <p>Processing: <strong>{$exportStatus.label}</strong></p>
-            <div class="progress-bar">
-                <div 
-                    class="progress-fill" 
-                    style="width: {($exportStatus.current / $exportStatus.total) * 100}%"
-                ></div>
+            <div class="loader-container">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="d20-loader">
+                    <path d="M12 2L19 7V17L12 22L5 17V7L12 2Z" />
+                    <path d="M12 2V22" opacity="0.3" />
+                    <path d="M5 7L19 7" opacity="0.3" />
+                    <path d="M5 17L19 17" opacity="0.3" />
+                    <path d="M5 7L12 22L19 7" opacity="0.5" />
+                    <path d="M5 17L12 2L19 17" opacity="0.5" />
+                </svg>
             </div>
-            <span class="progress-text">
-                {$exportStatus.current} of {$exportStatus.total} tokens
-            </span>
+            <h3>Generating STL Files</h3>
+            <p>Processing: <span class="label-badge">{$exportStatus.label}</span></p>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div 
+                        class="progress-fill" 
+                        style="width: {($exportStatus.current / $exportStatus.total) * 100}%"
+                    ></div>
+                </div>
+                <div class="progress-stats">
+                    <span class="progress-text">
+                        {Math.round(($exportStatus.current / $exportStatus.total) * 100)}% Complete
+                    </span>
+                    <span class="progress-count">
+                        {$exportStatus.current} / {$exportStatus.total}
+                    </span>
+                </div>
+            </div>
         </div>
     </div>
 {/if}
@@ -494,120 +510,143 @@
     .export-overlay {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
+        background: rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 9999;
+        animation: fadeIn 0.3s ease-out;
     }
 
     .export-card {
         background: var(--color-surface);
-        padding: var(--space-8);
-        border-radius: var(--radius-lg);
-        box-shadow: var(--shadow-xl);
-        width: 350px;
+        padding: 40px 40px 56px;
+        border-radius: 28px;
+        box-shadow: 
+            0 25px 50px -12px rgba(0, 0, 0, 0.25),
+            0 0 0 1px var(--color-border);
+        width: 460px;
         text-align: center;
-        border: 1px solid var(--color-border);
+        position: relative;
     }
 
     .export-card h3 {
         margin: var(--space-4) 0 var(--space-2);
         color: var(--color-text);
+        font-size: var(--font-size-lg);
+        font-weight: 700;
+        letter-spacing: -0.02em;
     }
 
     .export-card p {
         font-size: var(--font-size-sm);
         color: var(--color-text-muted);
-        margin-bottom: var(--space-6);
+        margin-bottom: var(--space-8);
+    }
+
+    .label-badge {
+        background: var(--color-bg-subtle);
+        color: var(--color-primary);
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-weight: 600;
+        border: 1px solid var(--color-primary-muted);
+    }
+
+    .progress-container {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3);
     }
 
     .progress-bar {
-        height: 8px;
+        height: 12px;
         background: var(--color-bg-subtle);
-        border-radius: 4px;
+        border-radius: 6px;
         overflow: hidden;
-        margin-bottom: var(--space-2);
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+        position: relative;
     }
 
     .progress-fill {
         height: 100%;
-        background: var(--color-primary);
-        transition: width 0.3s ease;
+        background: linear-gradient(90deg, var(--color-primary), var(--color-primary-hover));
+        transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        border-radius: 6px;
+        position: relative;
+    }
+
+    .progress-fill::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.2),
+            transparent
+        );
+        animation: shimmer 2s infinite;
+    }
+
+    .progress-stats {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 12px;
+        margin-top: 4px;
     }
 
     .progress-text {
         font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
+        color: var(--color-primary);
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
 
-    .spinner {
-        width: 40px;
-        height: 40px;
-        border: 3px solid var(--color-bg-subtle);
-        border-top: 3px solid var(--color-primary);
-        border-radius: 50%;
-        margin: 0 auto;
-        animation: spin 1s linear infinite;
-    }
-
-    .export-card {
-        background: var(--color-surface);
-        padding: var(--space-8);
-        border-radius: var(--radius-lg);
-        box-shadow: var(--shadow-xl);
-        width: 350px;
-        text-align: center;
-        border: 1px solid var(--color-border);
-    }
-
-    .export-card h3 {
-        margin: var(--space-4) 0 var(--space-2);
-        color: var(--color-text);
-    }
-
-    .export-card p {
-        font-size: var(--font-size-sm);
-        color: var(--color-text-muted);
-        margin-bottom: var(--space-6);
-    }
-
-    .progress-bar {
-        height: 8px;
-        background: var(--color-bg-subtle);
-        border-radius: 4px;
-        overflow: hidden;
-        margin-bottom: var(--space-2);
-    }
-
-    .progress-fill {
-        height: 100%;
-        background: var(--color-primary);
-        transition: width 0.3s ease;
-    }
-
-    .progress-text {
+    .progress-count {
         font-size: var(--font-size-xs);
         color: var(--color-text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
     }
 
-    .spinner {
-        width: 40px;
-        height: 40px;
-        border: 3px solid var(--color-bg-subtle);
-        border-top: 3px solid var(--color-primary);
-        border-radius: 50%;
-        margin: 0 auto;
-        animation: spin 1s linear infinite;
+    .loader-container {
+        display: flex;
+        justify-content: center;
+        margin-bottom: var(--space-4);
     }
 
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
+    .d20-loader {
+        width: 64px;
+        height: 64px;
+        color: var(--color-primary);
+        animation: d20-float 3s ease-in-out infinite, d20-pulse 2s ease-in-out infinite;
+        filter: drop-shadow(0 0 10px rgba(100, 108, 255, 0.3));
+    }
+
+    @keyframes d20-float {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50% { transform: translateY(-10px) rotate(5deg); }
+    }
+
+    @keyframes d20-pulse {
+        0%, 100% { opacity: 1; filter: drop-shadow(0 0 10px rgba(100, 108, 255, 0.3)); }
+        50% { opacity: 0.8; filter: drop-shadow(0 0 20px rgba(100, 108, 255, 0.5)); }
+    }
+
+    @keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
     }
 </style>
