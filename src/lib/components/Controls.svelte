@@ -29,6 +29,32 @@
         await exportTokens($tokenConfig);
     }
 
+    async function handleDownload() {
+        if (!$exportStatus.blob) return;
+        const url = URL.createObjectURL($exportStatus.blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = $exportStatus.filename || 'tokens.zip';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 10000);
+    }
+
+    function closeExport() {
+        exportStatus.set({
+            active: false,
+            complete: false,
+            current: 0,
+            total: 0,
+            label: '',
+            blob: null,
+            filename: ''
+        });
+    }
+
     // Proportional Scaling Logic
     let lastWidth = $tokenConfig.width;
     $: {
@@ -347,34 +373,51 @@
 {#if $exportStatus.active}
     <div class="export-overlay">
         <div class="export-card">
-            <div class="loader-container">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="d20-loader">
-                    <path d="M12 2L19 7V17L12 22L5 17V7L12 2Z" />
-                    <path d="M12 2V22" opacity="0.3" />
-                    <path d="M5 7L19 7" opacity="0.3" />
-                    <path d="M5 17L19 17" opacity="0.3" />
-                    <path d="M5 7L12 22L19 7" opacity="0.5" />
-                    <path d="M5 17L12 2L19 17" opacity="0.5" />
-                </svg>
-            </div>
-            <h3>Generating STL Files</h3>
-            <p>Processing: <span class="label-badge">{$exportStatus.label}</span></p>
-            <div class="progress-container">
-                <div class="progress-bar">
-                    <div
-                        class="progress-fill"
-                        style="width: {($exportStatus.current / $exportStatus.total) * 100}%"
-                    ></div>
+            {#if $exportStatus.complete}
+                <div class="success-icon-container">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="success-icon">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                        <polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
                 </div>
-                <div class="progress-stats">
-                    <span class="progress-text">
-                        {Math.round(($exportStatus.current / $exportStatus.total) * 100)}% Complete
-                    </span>
-                    <span class="progress-count">
-                        {$exportStatus.current} / {$exportStatus.total}
-                    </span>
+                <h3>Export Complete!</h3>
+                <p>Your tokens are ready for download.</p>
+                <div class="download-actions">
+                    <button class="primary download-btn" on:click={handleDownload}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Download ZIP
+                    </button>
+                    <button class="secondary close-btn" on:click={closeExport}>
+                        Close
+                    </button>
                 </div>
-            </div>
+            {:else}
+                <div class="loader-container">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="d20-loader">
+                        <path d="M12 2L19 7V17L12 22L5 17V7L12 2Z" />
+                        <path d="M12 2V22" opacity="0.3" />
+                        <path d="M5 7L19 7" opacity="0.3" />
+                        <path d="M5 17L19 17" opacity="0.3" />
+                        <path d="M5 7L12 22L19 7" opacity="0.5" />
+                        <path d="M5 17L12 2L19 17" opacity="0.5" />
+                    </svg>
+                </div>
+                <h3>Generating STL Files</h3>
+                <p>Processing: <span class="label-badge">{$exportStatus.label}</span></p>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div
+                            class="progress-fill"
+                            style="width: {($exportStatus.current / $exportStatus.total) * 100}%"
+                        ></div>
+                    </div>
+                    <div class="progress-stats">
+                        <span class="progress-text">
+                            {$exportStatus.current} / {$exportStatus.total}
+                        </span>
+                    </div>
+                </div>
+            {/if}
         </div>
     </div>
 {/if}
@@ -651,11 +694,6 @@
         letter-spacing: 0.05em;
     }
 
-    .progress-count {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-    }
-
     .loader-container {
         display: flex;
         justify-content: center;
@@ -688,5 +726,57 @@
     @keyframes fadeIn {
         from { opacity: 0; }
         to { opacity: 1; }
+    }
+
+    .success-icon-container {
+        display: flex;
+        justify-content: center;
+        margin-bottom: var(--space-4);
+    }
+
+    .success-icon {
+        width: 64px;
+        height: 64px;
+        color: #10b981;
+        filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.2));
+        animation: success-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    @keyframes success-pop {
+        0% { transform: scale(0.5); opacity: 0; }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .download-actions {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3);
+        margin-top: var(--space-4);
+    }
+
+    .download-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-3);
+        font-weight: 600;
+        font-size: var(--font-size-md);
+    }
+
+    .close-btn {
+        background: transparent;
+        border: 1px solid var(--color-border);
+        color: var(--color-text-muted);
+        padding: var(--space-2);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: var(--font-size-sm);
+    }
+
+    .close-btn:hover {
+        background: var(--color-bg-subtle);
+        color: var(--color-text);
+        border-color: var(--color-text-muted);
     }
 </style>

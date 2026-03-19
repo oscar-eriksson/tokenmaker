@@ -19,9 +19,12 @@ export async function exportTokens(config: any) {
 
     exportStatus.set({
         active: true,
+        complete: false,
         current: 0,
-        total: labelParts.length,
-        label: ''
+        total: labelParts.length + 1, // +1 for the final zipping step
+        label: 'Initializing...',
+        blob: null,
+        filename: ''
     });
 
     // Short yield to allow the "active: true" state to trigger a DOM render of the overlay
@@ -30,10 +33,11 @@ export async function exportTokens(config: any) {
     try {
         let count = 0;
         for (const label of labelParts) {
-            count++;
-            exportStatus.update(s => ({ ...s, current: count, label: label || 'Default' }));
+            const displayLabel = label || 'Default';
+            // Update label before starting processing, but keep current at the previous value (or 0 for the first one)
+            exportStatus.update(s => ({ ...s, label: displayLabel }));
             
-            // Yield to event loop to allow UI to update the progress bar/label text
+            // Yield to event loop to allow UI to update
             await new Promise(resolve => setTimeout(resolve, 50));
 
             const options: TokenOptions = {
@@ -53,7 +57,12 @@ export async function exportTokens(config: any) {
                 iconDepth: config.iconDepth
             };
 
-            const group = await createTokenGroup(options);
+            const group = await createTokenGroup(options, async (status) => {
+                exportStatus.update(s => ({ ...s, label: `${displayLabel} (${status})` }));
+                // Yield to the browser's UI thread so it can re-render the label text
+                await new Promise(resolve => setTimeout(resolve, 10));
+            });
+            
             group.updateMatrixWorld(true);
 
             // STLExporter parse returns a DataView when binary is true
@@ -63,56 +72,57 @@ export async function exportTokens(config: any) {
             // Explicitly pass the binary view as a Uint8Array to JSZip
             const stlBuffer = new Uint8Array(stlData.buffer, stlData.byteOffset, stlData.byteLength);
             zip.file(filename, stlBuffer);
+
+            // Increment current AFTER the token is fully processed
+            count++;
+            exportStatus.update(s => ({ ...s, current: count }));
         }
 
         exportStatus.update(s => ({ ...s, label: 'Generating ZIP...' }));
         
-        // Generate the ZIP as a Blob first
+        // Generate the ZIP as a Blob with DEFLATE compression
         const blob = await zip.generateAsync({ 
             type: 'blob',
             mimeType: 'application/zip',
-            compression: 'DEFLATE'
+            compression: 'DEFLATE' 
         });
         
-        console.log(`Export generated: ${blob.size} bytes`);
-
-        // Use a File object instead of a raw Blob. 
-        // Modern Chrome often respects the filename property of a File object 
-        // better than it does the 'download' attribute of a Blob-URL link.
-        // Generate a unique filename based on config
-        const iconPart = config.iconName ? config.iconName.toLowerCase().replace(/\s+/g, '_') : 'no_icon';
-        const labelsPart = labelParts.slice(0, 3).join('_').replace(/\s+/g, '');
+        // Count the ZIP generation as the final step
+        exportStatus.update(s => ({ ...s, current: labelParts.length + 1 }));
+        
+        console.log(`ZIP Export generated: ${blob.size} bytes`);
+        
+        // More aggressive sanitization for filename
+        const sanitize = (s: string) => s.replace(/[^a-z0-9]/gi, '_').toLowerCase().replace(/__+/g, '_');
+        const iconPart = config.iconName ? sanitize(config.iconName) : 'no_icon';
+        const labelsPart = labelParts.slice(0, 3).map((l: string) => sanitize(l)).join('_');
         const suffix = labelParts.length > 3 ? '_etc' : '';
         const sizePart = `${config.width}mm`;
-        const zipFilename = `tokens_${iconPart}_${labelsPart}${suffix}_${sizePart}.zip`;
+        const zipFilename = `tokens_${iconPart}_${labelsPart}${suffix}_${sizePart}.zip`.replace(/__+/g, '_');
+        
+        console.log(`Preparing download for: ${zipFilename}`);
+        
+        // Update store with completion info but do NOT trigger download yet
+        exportStatus.update(s => ({
+            ...s,
+            complete: true,
+            label: 'Ready for Download',
+            blob: blob,
+            filename: zipFilename
+        }));
 
-        const file = new File([blob], zipFilename, { type: 'application/zip' });
-        const url = URL.createObjectURL(file);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = zipFilename;
-        link.style.display = 'none';
-        
-        document.body.appendChild(link);
-        link.click();
-        
-        // IMPORTANT: We do NOT revoke the URL immediately. 
-        // For large blobs, revoking too early can cause "unreachable blob" errors 
-        // if the browser hasn't finished copying the data to the download manager.
-        setTimeout(() => {
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        }, 30000); // 30 second grace period
     } catch (err) {
         console.error("Export process failed:", err);
-        throw err;
-    } finally {
+        // Reset state on error
         exportStatus.set({
             active: false,
+            complete: false,
             current: 0,
             total: 0,
-            label: ''
+            label: '',
+            blob: null,
+            filename: ''
         });
+        throw err;
     }
 }

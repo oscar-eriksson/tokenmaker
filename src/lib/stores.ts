@@ -25,7 +25,10 @@ export const tokenConfig = writable({
 
 export const exportStatus = writable({
     active: false,
+    complete: false,
     current: 0,
     total: 0,
-    label: ''
+    label: '',
+    blob: null as Blob | null,
+    filename: '' as string
 });

@@ -131,11 +131,12 @@ export interface TokenOptions {
     iconDepth: number;
 }
 
-export async function createTokenGroup(options: TokenOptions): Promise<THREE.Group> {
+export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (status: string) => Promise<void> | void): Promise<THREE.Group> {
     const group = new THREE.Group();
     const overlap = 0.5; // Increased for more robust booleans
 
     // 1. Base
+    await onStatusUpdate?.('Generating Base...');
     const radius = options.width / 2;
     const filletR = Math.min(1.0, options.height * 0.15);
     const baseDepth = Math.max(0.5, options.height - 2 * filletR);
@@ -164,6 +165,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
     let textStrokeBrush: Brush | null = null;
 
     if (options.label.trim().length > 0) {
+        await onStatusUpdate?.('Extruding Text...');
         const font = await loadFont();
         const ttfSize = options.textSize * (72 / 100);
         const letterShapes = font.generateShapes(options.label, ttfSize);
@@ -198,6 +200,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
     let iconCutterBrush: Brush | null = null;
     let iconHoleCutterBrush: Brush | null = null;
     if (options.svgContent) {
+        await onStatusUpdate?.('Processing Icon...');
         const loader = new SVGLoader();
         const svgData = loader.parse(options.svgContent);
         const lightShapes: THREE.Shape[] = [];
@@ -246,6 +249,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
     }
 
     // 4. Combined Boolean
+    await onStatusUpdate?.('Boolean Operations...');
     const safetyBrush = new Brush(new THREE.CylinderGeometry(radius + filletR, radius + filletR, options.height * 2, 32), new THREE.MeshBasicMaterial());
     safetyBrush.rotateX(Math.PI / 2);
     safetyBrush.updateMatrixWorld();
@@ -270,6 +274,7 @@ export async function createTokenGroup(options: TokenOptions): Promise<THREE.Gro
         finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), toBrush(clamped), SUBTRACTION);
     }
 
+    await onStatusUpdate?.('Finalizing...');
     group.add(finalTokenMesh);
     return group;
 }
