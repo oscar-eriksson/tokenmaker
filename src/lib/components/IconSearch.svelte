@@ -6,6 +6,8 @@
     let showResults = false;
     let allIcons: { name: string; path: string }[] = [];
     let filteredIcons: { name: string; path: string }[] = [];
+    let activeIndex = -1;
+    let dropdownEl: HTMLUListElement;
 
     onMount(async () => {
         try {
@@ -21,6 +23,7 @@
     function handleSearch(event: Event) {
         const query = (event.target as HTMLInputElement).value.toLowerCase();
         searchQuery = query;
+        activeIndex = -1;
         if (query.trim().length > 1) {
             filteredIcons = allIcons
                 .filter((icon) => icon.name.toLowerCase().includes(query))
@@ -30,6 +33,31 @@
             showResults = false;
             filteredIcons = [];
         }
+    }
+
+    function handleKeydown(e: KeyboardEvent) {
+        if (!showResults || filteredIcons.length === 0) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            activeIndex = Math.min(activeIndex + 1, filteredIcons.length - 1);
+            scrollActiveIntoView();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            activeIndex = Math.max(activeIndex - 1, -1);
+            scrollActiveIntoView();
+        } else if ((e.key === 'Enter' || e.key === ' ') && activeIndex >= 0) {
+            e.preventDefault();
+            selectIcon(filteredIcons[activeIndex]);
+        } else if (e.key === 'Escape') {
+            showResults = false;
+            activeIndex = -1;
+        }
+    }
+
+    function scrollActiveIntoView() {
+        if (!dropdownEl || activeIndex < 0) return;
+        const item = dropdownEl.children[activeIndex] as HTMLElement;
+        item?.scrollIntoView({ block: 'nearest' });
     }
 
     async function selectIcon(icon: { name: string; path: string }) {
@@ -64,6 +92,7 @@
             placeholder="e.g. sword, shield, fire..."
             value={searchQuery}
             on:input={handleSearch}
+            on:keydown={handleKeydown}
             on:focus={() => {
                 if (searchQuery.trim().length > 1) showResults = true;
             }}
@@ -75,11 +104,12 @@
     </div>
 
     {#if showResults && filteredIcons.length > 0}
-        <ul class="dropdown">
-            {#each filteredIcons as icon}
+        <ul class="dropdown" bind:this={dropdownEl}>
+            {#each filteredIcons as icon, i}
                 <li>
                     <button
                         class="result-btn"
+                        class:active={i === activeIndex}
                         on:click={() => selectIcon(icon)}
                     >
                         {icon.name}
@@ -141,7 +171,8 @@
     }
 
     .result-btn:hover,
-    .result-btn:focus {
+    .result-btn:focus,
+    .result-btn.active {
         background: var(--color-surface-hover);
         color: var(--color-primary);
         outline: none;

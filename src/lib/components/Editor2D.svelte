@@ -3,6 +3,21 @@
 
     let svgElement: SVGSVGElement;
 
+    function prepareIconContent(svgContent: string): string {
+        return svgContent
+            .replace(/<svg[^>]*>/, '')
+            .replace(/<\/svg>/, '')
+            // Remove background rect (game-icons black background fill)
+            .replace(/<rect(?![^>]*fill="none")[^>]*\/?>/gi, '');
+    }
+
+    // Detect if SVG uses white fills (game-icons "white on black" format) → needs invert
+    // Otherwise render directly with fill="black" override (already-black or no-fill paths)
+    $: iconNeedsInvert = $tokenConfig.svgContent
+        ? /fill="(?:#fff|#ffffff|white)/i.test($tokenConfig.svgContent)
+        : false;
+    $: iconContent = $tokenConfig.svgContent ? prepareIconContent($tokenConfig.svgContent) : '';
+
     // Dragging state
     let draggingTarget: "icon" | "text" | null = null;
     let startMouseX = 0;
@@ -129,28 +144,6 @@
                     <circle cx="256" cy="256" r="256" />
                 </clipPath>
 
-                <!-- Mask to hollow out the inner area of the text stroke, mimicking outward 3D beveling -->
-                <mask id="text-hole-mask">
-                    <rect
-                        x="-5000"
-                        y="-5000"
-                        width="10000"
-                        height="10000"
-                        fill="white"
-                    />
-                    <text
-                        x="0"
-                        y="0"
-                        text-anchor="middle"
-                        dominant-baseline="central"
-                        font-family="'Roboto Black', sans-serif"
-                        font-weight="900"
-                        font-size={$tokenConfig.textSize}
-                        fill="black"
-                    >
-                        {$tokenConfig.labels.split(",")[0].trim() || "A"}
-                    </text>
-                </mask>
             </defs>
             <rect
                 x="-1000"
@@ -165,8 +158,8 @@
                 cx="0"
                 cy="0"
                 r={halfW}
-                fill="#e2e8f0"
-                stroke="#94a3b8"
+                fill="white"
+                stroke="#111"
                 stroke-width="0.5"
             />
 
@@ -185,10 +178,17 @@
                             2}, {-targetIconSize / 2}) scale({iconScale})"
                         clip-path="url(#icon-clip)"
                     >
-                        <!-- Strip the <svg> tag locally or just render it -->
-                        {@html $tokenConfig.svgContent
-                            .replace(/<svg[^>]*>/, "")
-                            .replace(/<\/svg>/, "")}
+                        {#if iconNeedsInvert}
+                            <!-- White-on-black format: invert to show black on white -->
+                            <g style="filter: invert(1)">
+                                {@html iconContent}
+                            </g>
+                        {:else}
+                            <!-- Dark/no-fill format: render directly as black -->
+                            <g fill="black">
+                                {@html iconContent}
+                            </g>
+                        {/if}
                     </g>
                     <!-- Hover/Active outline box -->
                     <rect
@@ -214,45 +214,19 @@
                     on:touchstart={(e) => onPointerDown(e, "text")}
                     role="none"
                 >
-                    <!-- Outer Black Stroke (matches 3D bevel size) -->
-                    <!-- Masking out the inner text shape forces the stroke to only grow OUTWARD! -->
                     <text
                         x="0"
                         y="0"
                         text-anchor="middle"
                         dominant-baseline="central"
-                        font-family="'Roboto Black', sans-serif"
+                        font-family="'Roboto Black', Arial Black, sans-serif"
                         font-weight="900"
                         font-size={$tokenConfig.textSize}
-                        fill="#111827"
-                        stroke={$tokenConfig.textStrokeSize > 0
-                            ? "#111827"
-                            : "transparent"}
-                        stroke-width={$tokenConfig.textStrokeSize > 0
-                            ? $tokenConfig.textStrokeSize * 2
-                            : 0}
+                        fill="black"
+                        stroke="white"
+                        stroke-width={$tokenConfig.textStrokeSize * 2}
                         stroke-linejoin="round"
-                        mask="url(#text-hole-mask)"
-                    >
-                        {$tokenConfig.labels.split(",")[0].trim() || "A"}
-                    </text>
-                    <!-- Inner red cut wall simulation (matches 3D inner cut material) & normal solid text -->
-                    <text
-                        x="0"
-                        y="0"
-                        text-anchor="middle"
-                        dominant-baseline="central"
-                        font-family="'Roboto Black', sans-serif"
-                        font-weight="900"
-                        font-size={$tokenConfig.textSize}
-                        fill={$tokenConfig.textStrokeSize > 0
-                            ? "transparent"
-                            : "#f8fafc"}
-                        stroke={$tokenConfig.textStrokeSize > 0
-                            ? "#dc2626"
-                            : "transparent"}
-                        stroke-width={$tokenConfig.textStrokeSize > 0 ? 1 : 0}
-                        stroke-linejoin="round"
+                        paint-order="stroke"
                     >
                         {$tokenConfig.labels.split(",")[0].trim() || "A"}
                     </text>
