@@ -1,6 +1,7 @@
 <script lang="ts">
     import { tokenConfig, exportStatus, isGenerating } from "../stores";
     const buildDate = __BUILD_DATE__;
+    const appVersion = __APP_VERSION__;
     import { exportTokens } from "../exportTokens";
     import IconSearch from "./IconSearch.svelte";
 
@@ -329,7 +330,7 @@
             </div>
             <div class="credits">
               <span>By Oscar Eriksson</span>
-              <span class="version">v1.1.0 (Build: {buildDate})</span>
+              <span class="version">v{appVersion} (Build: {buildDate})</span>
             </div>
         </footer>
     </div>
