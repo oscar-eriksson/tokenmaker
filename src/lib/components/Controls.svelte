@@ -446,12 +446,18 @@
         cursor: not-allowed;
     }
 
+    .version {
+        font-size: 0.65rem;
+        opacity: 0.6;
+    }
+
     .panel-footer {
         display: flex;
         justify-content: space-between;
         align-items: center;
         font-size: var(--font-size-xs);
         color: var(--color-text-muted);
+        margin-top: 0.5rem;
     }
 
     .footer-links {
@@ -482,12 +488,7 @@
         display: block;
     }
 
-    .version {
-        font-size: 0.65rem;
-        opacity: 0.6;
-    }
-
-    .spinner {
+    .export-overlay {
         position: fixed;
         inset: 0;
         background: rgba(0, 0, 0, 0.7);
@@ -496,6 +497,58 @@
         align-items: center;
         justify-content: center;
         z-index: 9999;
+    }
+
+    .export-card {
+        background: var(--color-surface);
+        padding: var(--space-8);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-xl);
+        width: 350px;
+        text-align: center;
+        border: 1px solid var(--color-border);
+    }
+
+    .export-card h3 {
+        margin: var(--space-4) 0 var(--space-2);
+        color: var(--color-text);
+    }
+
+    .export-card p {
+        font-size: var(--font-size-sm);
+        color: var(--color-text-muted);
+        margin-bottom: var(--space-6);
+    }
+
+    .progress-bar {
+        height: 8px;
+        background: var(--color-bg-subtle);
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: var(--space-2);
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: var(--color-primary);
+        transition: width 0.3s ease;
+    }
+
+    .progress-text {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid var(--color-bg-subtle);
+        border-top: 3px solid var(--color-primary);
+        border-radius: 50%;
+        margin: 0 auto;
+        animation: spin 1s linear infinite;
     }
 
     .export-card {
