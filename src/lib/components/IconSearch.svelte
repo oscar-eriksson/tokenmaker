@@ -73,6 +73,7 @@
                 const svgContent = await res.text();
                 tokenConfig.update((c) => {
                     c.svgContent = svgContent;
+                    c.iconName = icon.name;
                     return c;
                 });
             } else {

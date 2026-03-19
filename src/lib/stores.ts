@@ -6,6 +6,7 @@ export const isGenerating = writable(false);
 export const tokenConfig = writable({
     width: 25,
     height: 5,
+    iconName: null as string | null,
     svgContent: null as string | null,
     labels: 'A, B, C',
     textPosX: 0,

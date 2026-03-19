@@ -77,12 +77,19 @@ export async function exportTokens(config: any) {
         // Use a File object instead of a raw Blob. 
         // Modern Chrome often respects the filename property of a File object 
         // better than it does the 'download' attribute of a Blob-URL link.
-        const file = new File([blob], 'dnd_tokens.zip', { type: 'application/zip' });
+        // Generate a unique filename based on config
+        const iconPart = config.iconName ? config.iconName.toLowerCase().replace(/\s+/g, '_') : 'no_icon';
+        const labelsPart = labelParts.slice(0, 3).join('_').replace(/\s+/g, '');
+        const suffix = labelParts.length > 3 ? '_etc' : '';
+        const sizePart = `${config.width}mm`;
+        const zipFilename = `tokens_${iconPart}_${labelsPart}${suffix}_${sizePart}.zip`;
+
+        const file = new File([blob], zipFilename, { type: 'application/zip' });
         const url = URL.createObjectURL(file);
         
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'dnd_tokens.zip';
+        link.download = zipFilename;
         link.style.display = 'none';
         
         document.body.appendChild(link);

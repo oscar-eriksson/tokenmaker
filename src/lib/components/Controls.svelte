@@ -16,6 +16,7 @@
             const content = e.target?.result as string;
             tokenConfig.update((c) => {
                 c.svgContent = content;
+                c.iconName = file.name.replace(/\.svg$/i, '');
                 return c;
             });
         };
