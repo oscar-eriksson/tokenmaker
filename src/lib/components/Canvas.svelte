@@ -24,12 +24,16 @@
         initThreeJS();
 
         // Add default lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // Refined lighting for better depth perception
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
         scene.add(ambientLight);
+        const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        mainLight.position.set(40, 0, 40);
+        scene.add(mainLight);
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(10, 20, 10);
-        scene.add(dirLight);
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        fillLight.position.set(-40, 0, 40);
+        scene.add(fillLight);
 
         isSceneReady = true;
         animate();

@@ -3,7 +3,8 @@ import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
 import { Font } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TTFLoader } from 'three/examples/jsm/loaders/TTFLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-import { SUBTRACTION, INTERSECTION, ADDITION, Evaluator, Brush } from 'three-bvh-csg';
+import initManifold from 'manifold-3d';
+import manifoldWasm from 'manifold-3d/manifold.wasm?url';
 import * as ClipperLib from 'clipper-lib';
 
 // Robust 2D polygon offsetting using ClipperLib
@@ -89,17 +90,125 @@ function offsetShapesRobust(shapes: THREE.Shape[], amount: number): THREE.Shape[
     return resultShapes;
 }
 
-function toBrush(mesh: THREE.Mesh | Brush): Brush {
-    if (mesh instanceof Brush) {
-        mesh.updateMatrixWorld();
-        return mesh;
+let manifoldModule: any = null;
+export async function getManifold() {
+    if (manifoldModule) return manifoldModule;
+    manifoldModule = await initManifold({
+        locateFile: () => manifoldWasm
+    });
+    manifoldModule.setup();
+    return manifoldModule;
+}
+
+function threeMeshToManifold(m: any, mesh: THREE.Mesh): any {
+    mesh.updateMatrixWorld();
+    let geometry = mesh.geometry;
+    if (geometry.index) {
+        geometry = geometry.toNonIndexed();
     }
-    const b = new Brush(mesh.geometry, mesh.material);
-    b.position.copy(mesh.position);
-    b.rotation.copy(mesh.rotation);
-    b.scale.copy(mesh.scale);
-    b.updateMatrixWorld();
-    return b;
+    const pos = geometry.attributes.position.array as Float32Array;
+    
+    const matrix = mesh.matrixWorld;
+    const transformedPos = new Float32Array(pos.length);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.length; i += 3) {
+        v.set(pos[i], pos[i+1], pos[i+2]).applyMatrix4(matrix);
+        transformedPos[i] = v.x;
+        transformedPos[i+1] = v.y;
+        transformedPos[i+2] = v.z;
+    }
+
+    const indices = new Uint32Array(transformedPos.length / 3);
+    for (let i = 0; i < indices.length; i++) indices[i] = i;
+
+    const meshData = new m.Mesh({
+        numProp: 3,
+        vertProperties: transformedPos,
+        triVerts: indices
+    });
+
+    meshData.merge(); // Important: Fixes common non-manifold issues in input mesh
+
+    const manifold = m.Manifold.ofMesh(meshData);
+    return manifold;
+}
+
+function manifoldToThreeMesh(mMesh: any, material: THREE.Material): THREE.Mesh {
+    const mesh = mMesh.getMesh();
+    const geometry = new THREE.BufferGeometry();
+    
+    const numVert = mesh.numVert;
+    const numProp = mesh.numProp;
+    const vertProperties = mesh.vertProperties;
+    
+    // Extract only x, y, z positions from interleaved properties
+    const pos = new Float32Array(numVert * 3);
+    for (let i = 0; i < numVert; i++) {
+        pos[i * 3 + 0] = vertProperties[i * numProp + 0];
+        pos[i * 3 + 1] = vertProperties[i * numProp + 1];
+        pos[i * 3 + 2] = vertProperties[i * numProp + 2];
+    }
+    
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setIndex(new THREE.BufferAttribute(mesh.triVerts, 1));
+    
+    // Convert to non-indexed to get sharp edges and compute normals
+    const nonIndexedGeom = geometry.toNonIndexed();
+    nonIndexedGeom.computeVertexNormals();
+    
+    // Add vertex colors for fake AO/shading
+    const positions = nonIndexedGeom.attributes.position.array;
+    const normals = nonIndexedGeom.attributes.normal.array;
+    const colors = new Float32Array(positions.length);
+    
+    for (let i = 0; i < normals.length; i += 3) {
+        const nx = normals[i];
+        const ny = normals[i+1];
+        const nz = normals[i+2];
+        
+        let color = 1.0; // Default (top surface)
+        
+        // Face points mostly up
+        if (nz > 0.9) {
+            color = 1.0; // Full base color
+        } 
+        // Face points mostly down
+        else if (nz < -0.9) {
+            color = 0.3; // Deep shadow
+        }
+        // Side walls
+        else {
+            color = 0.6; // Mid shadow
+        }
+        
+        colors[i] = color;
+        colors[i+1] = color;
+        colors[i+2] = color;
+    }
+    
+    nonIndexedGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    
+    const shadedMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x94a3b8, // Elegant slate blue-grey
+        vertexColors: true,
+        roughness: 0.4,
+        metalness: 0.2
+    });
+    
+    return new THREE.Mesh(nonIndexedGeom, shadedMaterial);
+}
+
+function shapesToPolygons(shapes: THREE.Shape[]): [number, number][][] {
+    const polygons: [number, number][][] = [];
+    for (const shape of shapes) {
+        const points = shape.getPoints(12);
+        polygons.push(points.map(p => [p.x, p.y]));
+        for (const hole of shape.holes) {
+            const hPoints = hole.getPoints(12);
+            polygons.push(hPoints.map(p => [p.x, p.y]));
+        }
+    }
+    return polygons;
 }
 
 let cachedFont: Font | null = null;
@@ -133,9 +242,11 @@ export interface TokenOptions {
 
 export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (status: string) => Promise<void> | void): Promise<THREE.Group> {
     const group = new THREE.Group();
-    const overlap = 0.5; // Increased for more robust booleans
+    const overlap = 0.5;
 
-    // 1. Base
+    const m = await getManifold();
+
+    // 1. Base (Three.js Extrude is simpler for bevels, then converted to manifold)
     await onStatusUpdate?.('Generating Base...');
     const radius = options.width / 2;
     const filletR = Math.min(1.0, options.height * 0.15);
@@ -144,7 +255,7 @@ export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (
     circleShape.absarc(0, 0, radius, 0, Math.PI * 2, false);
     const baseGeom = new THREE.ExtrudeGeometry(circleShape, {
         depth: baseDepth,
-        curveSegments: 64, // Increased for smoother circumference
+        curveSegments: 64,
         bevelEnabled: true,
         bevelSize: filletR,
         bevelThickness: filletR,
@@ -154,53 +265,47 @@ export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (
     const baseMesh = new THREE.Mesh(baseGeom, new THREE.MeshStandardMaterial({ color: 0xffffff }));
     baseMesh.updateMatrixWorld();
 
-    let finalTokenMesh: THREE.Mesh = baseMesh;
-    const evaluator = new Evaluator();
-    evaluator.useGroups = true;
-
     const topZ = options.height / 2;
 
-    // 2. Text Prep
-    let textCutterBrush: Brush | null = null;
-    let textStrokeBrush: Brush | null = null;
+    // 2. Text Prep using Manifold CrossSection
+    let mText: any = null;
+    let mStroke: any = null;
 
     if (options.label.trim().length > 0) {
-        await onStatusUpdate?.('Extruding Text...');
+        await onStatusUpdate?.('Extruding Text (Manifold)...');
         const font = await loadFont();
         const ttfSize = options.textSize * (72 / 100);
         const letterShapes = font.generateShapes(options.label, ttfSize);
 
-        const textGeom = new THREE.ExtrudeGeometry(letterShapes, { depth: options.textDepth + overlap, bevelEnabled: false, curveSegments: 12 });
-        textGeom.computeBoundingBox();
-        const textCenter = textGeom.boundingBox!.getCenter(new THREE.Vector3());
-
+        // Center text in 2D
+        const dummyGeom = new THREE.ShapeGeometry(letterShapes);
+        dummyGeom.computeBoundingBox();
+        const textCenter = dummyGeom.boundingBox!.getCenter(new THREE.Vector3());
+        
         const fData = (font as any).data;
         const scaleFact = ttfSize / (fData.resolution || 1000);
         const centralY = (((fData.ascender || 800) + (fData.descender || -200)) / 2) * scaleFact;
 
-        textGeom.translate(-textCenter.x, -centralY, -(options.textDepth + overlap) / 2);
-        
-        const textMesh = new THREE.Mesh(textGeom, new THREE.MeshStandardMaterial({ color: 0x222222 }));
-        textMesh.position.set(options.textPosX, options.textPosY, topZ - options.textDepth / 2);
-        textMesh.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
-        textMesh.updateMatrixWorld();
-        textCutterBrush = toBrush(textMesh);
+        const textCS = m.CrossSection.ofPolygons(shapesToPolygons(letterShapes), 'NonZero');
+        mText = textCS.extrude(options.textDepth + overlap)
+            .translate([-textCenter.x, -centralY, -(options.textDepth + overlap) / 2])
+            .rotate([0, 0, -options.textRotation])
+            .translate([options.textPosX, options.textPosY, topZ - options.textDepth / 2]);
+        textCS.delete();
 
-        // Stroke Mask
         const strokeShapes = offsetShapesRobust(letterShapes, options.textStrokeSize);
-        const strokeGeom = new THREE.ExtrudeGeometry(strokeShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 12 });
-        strokeGeom.translate(-textCenter.x, -centralY, -(options.iconDepth + overlap) / 2);
-        textStrokeBrush = new Brush(strokeGeom, new THREE.MeshBasicMaterial());
-        textStrokeBrush.position.set(options.textPosX, options.textPosY, topZ - (options.iconDepth - overlap) / 2);
-        textStrokeBrush.rotation.z = THREE.MathUtils.degToRad(-options.textRotation);
-        textStrokeBrush.updateMatrixWorld();
+        const strokeCS = m.CrossSection.ofPolygons(shapesToPolygons(strokeShapes), 'NonZero');
+        mStroke = strokeCS.extrude(options.iconDepth + overlap)
+            .translate([-textCenter.x, -centralY, -(options.iconDepth + overlap) / 2])
+            .rotate([0, 0, -options.textRotation])
+            .translate([options.textPosX, options.textPosY, topZ - (options.iconDepth - overlap) / 2]);
+        strokeCS.delete();
     }
 
-    // 3. Icon Prep
-    let iconCutterBrush: Brush | null = null;
-    let iconHoleCutterBrush: Brush | null = null;
+    // 3. Icon Prep using Manifold CrossSection
+    let mIcon: any = null;
     if (options.svgContent) {
-        await onStatusUpdate?.('Processing Icon...');
+        await onStatusUpdate?.('Processing Icon (Manifold)...');
         const loader = new SVGLoader();
         const svgData = loader.parse(options.svgContent);
         const lightShapes: THREE.Shape[] = [];
@@ -223,10 +328,6 @@ export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (
 
         if (darkShapes.length > 0 || lightShapes.length > 0) {
             const scale = Math.max(0, options.width - options.iconMargin * 2) / 512;
-            const darkMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-            
-            // CLEAN ICON VIA 2D BOOLEAN: Subtract light shapes (holes/islands) from dark shapes in 2D
-            // Plus combine any internal holes from the SVG paths themselves
             const allHoleShapes: THREE.Shape[] = [...lightShapes];
             for (const s of [...darkShapes, ...lightShapes]) {
                 for (const h of s.holes) {
@@ -238,43 +339,54 @@ export async function createTokenGroup(options: TokenOptions, onStatusUpdate?: (
             const finalShapes = combinedDarkShapes.length > 0 ? combinedDarkShapes : lightShapes;
 
             if (finalShapes.length > 0) {
-                const iconGeom = new THREE.ExtrudeGeometry(finalShapes, { depth: options.iconDepth + overlap, bevelEnabled: false, curveSegments: 12 });
-                iconGeom.translate(-256, -256, -(options.iconDepth + overlap) / 2);
-                iconCutterBrush = new Brush(iconGeom, darkMat);
-                iconCutterBrush.scale.set(scale, -scale, 1);
-                iconCutterBrush.position.set(options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2);
-                iconCutterBrush.updateMatrixWorld();
+                const iconCS = m.CrossSection.ofPolygons(shapesToPolygons(finalShapes), 'NonZero');
+                mIcon = iconCS.extrude(options.iconDepth + overlap)
+                    .translate([-256, -256, -(options.iconDepth + overlap) / 2])
+                    .scale([scale, -scale, 1])
+                    .translate([options.iconPosX, options.iconPosY, topZ - options.iconDepth / 2]);
+                iconCS.delete();
             }
         }
     }
 
-    // 4. Combined Boolean
-    await onStatusUpdate?.('Boolean Operations...');
-    const safetyBrush = new Brush(new THREE.CylinderGeometry(radius + filletR, radius + filletR, options.height * 2, 32), new THREE.MeshBasicMaterial());
-    safetyBrush.rotateX(Math.PI / 2);
-    safetyBrush.updateMatrixWorld();
-
-    evaluator.useGroups = true; // Use groups throughout to preserve visual contrast
-    let masterCutter: Brush | null = null;
+    // 4. Combined Boolean using Manifold
+    await onStatusUpdate?.('Boolean Operations (Manifold)...');
     
-    if (iconCutterBrush) {
-        if (textStrokeBrush) {
-            iconCutterBrush = toBrush(evaluator.evaluate(iconCutterBrush, textStrokeBrush, SUBTRACTION));
+    let mBase = threeMeshToManifold(m, baseMesh);
+    
+    // Safety clamp (cylinder)
+    const safetyGeom = new THREE.CylinderGeometry(radius + filletR, radius + filletR, options.height * 2, 64);
+    safetyGeom.rotateX(Math.PI / 2);
+    const mSafety = threeMeshToManifold(m, new THREE.Mesh(safetyGeom));
+
+    let mCutter: any = null;
+
+    if (mIcon) {
+        if (mStroke) {
+            mIcon = mIcon.subtract(mStroke);
+            mStroke.delete();
         }
-        masterCutter = iconCutterBrush;
+        mCutter = mIcon;
     }
     
-    if (textCutterBrush) {
-        masterCutter = masterCutter ? toBrush(evaluator.evaluate(masterCutter, textCutterBrush, ADDITION)) : textCutterBrush;
+    if (mText) {
+        mCutter = mCutter ? mCutter.add(mText) : mText;
     }
 
-    if (masterCutter) {
-        evaluator.useGroups = true; // Use groups for final cut
-        const clamped = evaluator.evaluate(masterCutter, safetyBrush, INTERSECTION);
-        finalTokenMesh = evaluator.evaluate(toBrush(finalTokenMesh), toBrush(clamped), SUBTRACTION);
+    if (mCutter) {
+        const mClampedCutter = mCutter.intersect(mSafety);
+        mBase = mBase.subtract(mClampedCutter);
+        
+        mCutter.delete();
+        mClampedCutter.delete();
     }
+
+    mSafety.delete();
+
+    const finalMesh = manifoldToThreeMesh(mBase, baseMesh.material as THREE.Material);
+    mBase.delete();
 
     await onStatusUpdate?.('Finalizing...');
-    group.add(finalTokenMesh);
+    group.add(finalMesh);
     return group;
 }
